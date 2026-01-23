@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block content %}
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4 rounded shadow-sm">
+  <div class="container-fluid">
+    <a class="navbar-brand fw-bold" href="#">
+        <i class="fa-solid fa-face-smile-wink me-2"></i>E-Presensi
+    </a>
+    <div class="collapse navbar-collapse" id="navbarNav">
+      <ul class="navbar-nav ms-auto">
+        <li class="nav-item"><a class="nav-link" href="/dashboard">Dashboard</a></li>
+        <li class="nav-item"><a class="nav-link active" href="{{ url_for('izin') }}">Izin</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('riwayat') }}">Riwayat</a></li>
+        <li class="nav-item ms-2">
+            <a href="{{ url_for('logout') }}" class="btn btn-light btn-sm text-primary fw-bold mt-1">Logout</a>
+        </li>
+      </ul>
+    </div>
+  </div>
+</nav>
+
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card shadow">
+                <div class="card-header bg-white py-3">
+                    <h5 class="m-0 fw-bold text-primary"><i class="fa-solid fa-envelope-open-text me-2"></i>Form Pengajuan Izin</h5>
+                </div>
+                <div class="card-body p-4">
+                    
+                    <form action="/izin" method="POST" enctype="multipart/form-data">
+                        
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Tanggal Mulai</label>
+                                <input type="date" name="tgl_mulai" class="form-control" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Tanggal Selesai</label>
+                                <input type="date" name="tgl_selesai" class="form-control" required>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Jenis Izin</label>
+                            <select name="tipe_izin" class="form-select" required>
+                                <option value="Sakit">Sakit (Wajib Surat Dokter)</option>
+                                <option value="Cuti">Cuti Tahunan</option>
+                                <option value="Penting">Keperluan Penting</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Keterangan / Alasan</label>
+                            <textarea name="keterangan" class="form-control" rows="3" placeholder="Jelaskan alasan izin Anda..." required></textarea>
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">Upload Bukti (Foto/Surat)</label>
+                            <input type="file" name="bukti_foto" class="form-control" accept="image/*" required>
+                            <small class="text-muted">Format: JPG/PNG. Maks 2MB.</small>
+                        </div>
+
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-primary fw-bold py-2">
+                                <i class="fa-solid fa-paper-plane me-2"></i>KIRIM PENGAJUAN
+                            </button>
+                            <a href="/dashboard" class="btn btn-light text-secondary">Batal & Kembali</a>
+                        </div>
+
+                    </form>
+                </div>
+            </div>
+
+            <div class="mt-4">
+                <h6 class="fw-bold mb-3">Riwayat Pengajuan Terakhir</h6>
+                {% if riwayat %}
+                    <div class="list-group">
+                        {% for r in riwayat %}
+                        <div class="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="mb-0 fw-bold">{{ r[2] }} ({{ r[0] }} s/d {{ r[1] }})</h6>
+                                <small class="text-muted">{{ r[3] }}</small>
+                            </div>
+                            {% if r[4] == 'Pending' %}
+                                <span class="badge bg-warning text-dark">Menunggu</span>
+                            {% elif r[4] == 'Disetujui' %}
+                                <span class="badge bg-success">Disetujui</span>
+                            {% else %}
+                                <span class="badge bg-danger">Ditolak</span>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="alert alert-light text-center">Belum ada riwayat pengajuan.</div>
+                {% endif %}
+            </div>
+
+        </div>
+    </div>
+</div>
+{% endblock %}

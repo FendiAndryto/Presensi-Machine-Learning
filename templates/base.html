@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <title>Sistem Presensi Wajah</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        body { background-color: #f0f2f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .card { border-radius: 15px; border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .btn-primary { background-color: #0d6efd; border-radius: 10px; }
+        /* Tambahan styling agar Navbar cantik */
+        .navbar { border-radius: 0 0 15px 15px; }
+    </style>
+  </head>
+  <body>
+    
+    {% if session['user_id'] %}
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm mb-4">
+      <div class="container">
+        <a class="navbar-brand fw-bold" href="/dashboard">
+            <i class="fa-solid fa-face-smile-wink me-2"></i>PRESENSI AI
+        </a>
+        
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav ms-auto">
+            
+            <li class="nav-item">
+              <a class="nav-link active" href="/dashboard">
+                  <i class="fa-solid fa-house me-1"></i> Dashboard
+              </a>
+            </li>
+
+            {% if session['role'] == 'Admin' %}
+            <li class="nav-item">
+                <a class="nav-link" href="/admin/users">
+                    <i class="fa-solid fa-users-gear me-1"></i> Kelola Users
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/admin/laporan">
+                    <i class="fa-solid fa-file-lines me-1"></i> Laporan
+                </a>
+            </li>
+
+            {% else %}
+                
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('riwayat') }}">
+                        <i class="fa-solid fa-clock-rotate-left me-1"></i> Riwayat Absen
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('izin') }}">
+                        <i class="fa-solid fa-envelope-open-text me-1"></i> Ajukan Izin
+                    </a>
+                </li>
+            {% endif %}
+
+            <li class="nav-item ms-lg-3">
+              <a class="btn btn-danger btn-sm mt-1" href="/logout">
+                  <i class="fa-solid fa-right-from-bracket"></i> Logout
+              </a>
+            </li>
+
+          </ul>
+        </div>
+      </div>
+    </nav>
+    {% endif %}
+    <div class="container mt-3">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+              </div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+    </div>
+
+    {% block content %}{% endblock %}
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  </body>
+</html>
