@@ -21,7 +21,7 @@ app.secret_key = 'rahasia_skripsi_pendi' # Kunci untuk Session & Flash
 # --- KONFIGURASI DATABASE ---
 DB_NAME = "skripsi_db"
 DB_USER = "postgres"
-DB_PASS = "12345"  # <--- PASTIKAN PASSWORD BENAR
+DB_PASS = "12345"  
 DB_HOST = "localhost"
 
 # --- DATABASE CONNECTION ---
@@ -42,19 +42,13 @@ if os.path.exists('trainer/trainer.yml'):
 names = {} 
 
 def load_user_names():
-    """
-    Fungsi ini bertugas mengambil daftar nama terbaru dari Database PostgreSQL.
-    Dipanggil saat aplikasi mulai, atau setelah Training selesai.
-    """
     global names
     names = {} # Reset memori dulu
     
     try:
-        # Buka koneksi database (Pastikan fungsi get_db_connection ada di file ini)
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # Ambil semua ID dan Nama Lengkap
         cur.execute("SELECT id, nama_lengkap FROM users")
         rows = cur.fetchall()
         

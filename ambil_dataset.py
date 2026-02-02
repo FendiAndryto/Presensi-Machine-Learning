@@ -17,7 +17,6 @@ face_id = input('masukkan ID User (Angka, contoh: 1): ')
 print("\n[INFO] Pastikan pencahayaan cukup terang.")
 
 # --- SKENARIO PENGAMBILAN DATA ---
-# Kita buat list instruksi
 instruksi_sesi = [
     "Sesi 1: WAJAH DATAR (SERIUS)",
     "Sesi 2: WAJAH SENYUM (GIGI TERLIHAT)",

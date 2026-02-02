@@ -1,22 +1,6 @@
 {% extends "base.html" %}
 
 {% block content %}
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 shadow">
-  <div class="container-fluid">
-    <a class="navbar-brand fw-bold" href="#">
-        <i class="fa-solid fa-user-secret me-2"></i>ADMIN PANEL
-    </a>
-    <div class="collapse navbar-collapse">
-      <ul class="navbar-nav ms-auto">
-        <li class="nav-item"><a class="nav-link active" href="#">Dashboard</a></li>
-        <li class="nav-item"><a class="nav-link" href="{{ url_for('laporan') }}">Laporan Bulanan</a></li>
-        <li class="nav-item ms-3">
-            <a href="{{ url_for('logout') }}" class="btn btn-danger btn-sm fw-bold mt-1">Logout</a>
-        </li>
-      </ul>
-    </div>
-  </div>
-</nav>
 
 <div class="container">
     <h3 class="fw-bold text-secondary mb-4">Overview Hari Ini ({{ tgl_sekarang }})</h3>
