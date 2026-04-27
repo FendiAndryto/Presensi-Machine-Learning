@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, Response, jsonify, session
+from flask import Flask, render_template, Response, request, redirect, url_for, flash, session, jsonify 
 import cv2
 import os
 import psycopg2
@@ -703,7 +703,7 @@ def kelola_users():
         username = request.form['username']
         password = request.form['password']
         divisi_id = request.form['divisi']
-        role = request.form['role'] # 'Staff' atau 'Admin'
+        role = request.form['role'] 
         
         try:
             cur.execute("""
@@ -740,6 +740,265 @@ def hapus_user(id):
     
     flash('User berhasil dihapus.', 'warning')
     return redirect(url_for('kelola_users'))
+
+# API MOBILE APP (FLUTTER)
+
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    try:
+        # 1. Terima data JSON dari Flutter
+        data = request.get_json()
+        
+        # Cek apakah data dikirim?
+        if not data:
+            return jsonify({'status': 'error', 'pesan': 'Data tidak ditemukan'}), 400
+
+        input_username = data.get('username')
+        input_password = data.get('password')
+
+        # 2. Cek ke Database
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # Ambil data user berdasarkan username
+        cur.execute("SELECT id, username, password, nama_lengkap, role FROM users WHERE username = %s", (input_username,))
+        user = cur.fetchone()
+        conn.close()
+
+        # 3. Logika Validasi Password
+        if user:
+            # user[2] adalah password dari DB
+            # CATATAN: Jika kamu pakai hash (werkzeug), gunakan check_password_hash(user[2], input_password)
+            # Jika masih plain text (skripsi sederhana), pakai perbandingan langsung:
+            if user[2] == input_password:
+                
+                # LOGIN SUKSES!
+                # Kirim balik data user ke Flutter (JANGAN KIRIM PASSWORDNYA!)
+                return jsonify({
+                    'status': 'success',
+                    'pesan': 'Login Berhasil',
+                    'data': {
+                        'user_id': user[0],
+                        'nama': user[3],
+                        'role': user[4]
+                    }
+                }), 200
+            else:
+                # Password Salah
+                return jsonify({'status': 'error', 'pesan': 'Password Salah'}), 401
+        else:
+            # Username Tidak Ditemukan
+            return jsonify({'status': 'error', 'pesan': 'Username tidak terdaftar'}), 401
+
+    except Exception as e:
+        print(f"Error API Login: {e}")
+        return jsonify({'status': 'error', 'pesan': 'Terjadi kesalahan server'}), 500
+    
+# API ABSENSI
+
+@app.route('/api/absen', methods=['POST'])
+def api_absen():
+    try:
+        # 1. Validasi Input Gambar
+        if 'image' not in request.files:
+            return jsonify({'status': 'error', 'pesan': 'Tidak ada file gambar'}), 400
+            
+        file = request.files['image']
+        user_id_claimed = request.form.get('user_id')
+        
+        if not user_id_claimed:
+             return jsonify({'status': 'error', 'pesan': 'User ID tidak ditemukan'}), 400
+
+        # 2. Proses Gambar (OpenCV)
+        filestr = file.read()
+        npimg = np.frombuffer(filestr, np.uint8)
+        frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+        
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = face_detector.detectMultiScale(gray, 1.1, 4)
+        
+        if len(faces) == 0:
+            return jsonify({'status': 'error', 'pesan': 'Wajah tidak terdeteksi'}), 200
+            
+        # 3. Prediksi Wajah
+        detected_id = 0
+        confidence_result = 100
+        
+        for (x, y, w, h) in faces:
+            id_prediksi, confidence = recognizer.predict(gray[y:y+h, x:x+w])
+            detected_id = id_prediksi
+            confidence_result = confidence
+            
+        # 4. Cek Kecocokan & Simpan ke Database
+        if confidence_result < 60:
+            if str(detected_id) == str(user_id_claimed):
+                nama_user = names.get(detected_id, "Unknown")
+                
+                conn = get_db_connection()
+                cur = conn.cursor()
+
+                # ==========================================
+                # ✅ TAMBAHAN BARU: CEK APAKAH SUDAH ABSEN HARI INI
+                # ==========================================
+                cur.execute("SELECT id FROM absensi WHERE user_id = %s AND tanggal = CURRENT_DATE", (detected_id,))
+                sudah_absen = cur.fetchone()
+
+                if sudah_absen:
+                    # Kalau sudah ada datanya, TOLAK!
+                    cur.close()
+                    conn.close()
+                    return jsonify({'status': 'error', 'pesan': f'Halo {nama_user}, kamu SUDAH Absen Masuk hari ini!'}), 200
+
+                # ==========================================
+                # JIKA BELUM ABSEN, BARU SIMPAN (INSERT)
+                # ==========================================
+                query = """
+                    INSERT INTO absensi (user_id, tanggal, jam_masuk, status_kehadiran) 
+                    VALUES (%s, CURRENT_DATE, CURRENT_TIME, 'Hadir')
+                """
+                cur.execute(query, (detected_id,))
+                conn.commit()
+                
+                cur.close()
+                conn.close()
+                
+                return jsonify({
+                    'status': 'success',
+                    'pesan': f'Absen Masuk Berhasil! Halo {nama_user}',
+                    'confidence': round(confidence_result, 2)
+                }), 200
+            else:
+                return jsonify({'status': 'error', 'pesan': 'Wajah tidak cocok dengan akun ini!'}), 200
+        else:
+            return jsonify({'status': 'error', 'pesan': 'Wajah tidak dikenali'}), 200
+
+    except Exception as e:
+        print(f"Error API Absen: {e}")
+        # Kembalikan pesan error biar kita tau salahnya dimana
+        return jsonify({'status': 'error', 'pesan': f'Database Error: {str(e)}'}), 500
+    
+# API ABSENSI PULANG
+
+@app.route('/api/absen_pulang', methods=['POST'])
+def api_absen_pulang():
+    try:
+        # 1. Validasi Input Gambar
+        if 'image' not in request.files:
+            return jsonify({'status': 'error', 'pesan': 'Tidak ada file gambar'}), 400
+            
+        file = request.files['image']
+        user_id_claimed = request.form.get('user_id')
+        
+        if not user_id_claimed:
+             return jsonify({'status': 'error', 'pesan': 'User ID tidak ditemukan'}), 400
+
+        # 2. Proses Gambar (OpenCV)
+        filestr = file.read()
+        npimg = np.frombuffer(filestr, np.uint8)
+        frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+        
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = face_detector.detectMultiScale(gray, 1.1, 4)
+        
+        if len(faces) == 0:
+            return jsonify({'status': 'error', 'pesan': 'Wajah tidak terdeteksi'}), 200
+            
+        # 3. Prediksi Wajah
+        detected_id = 0
+        confidence_result = 100
+        
+        for (x, y, w, h) in faces:
+            id_prediksi, confidence = recognizer.predict(gray[y:y+h, x:x+w])
+            detected_id = id_prediksi
+            confidence_result = confidence
+            
+        # 4. Cek Kecocokan & Update Database
+        if confidence_result < 60:
+            if str(detected_id) == str(user_id_claimed):
+                nama_user = names.get(detected_id, "Unknown")
+                
+                conn = get_db_connection()
+                cur = conn.cursor()
+
+                # --- QUERY SQL UPDATE ---
+                # Cari baris absen hari ini yang jam_pulangnya masih kosong (NULL atau '-')
+                query = """
+                    UPDATE absensi 
+                    SET jam_pulang = CURRENT_TIME 
+                    WHERE user_id = %s AND tanggal = CURRENT_DATE AND jam_pulang IS NULL
+                    RETURNING id;
+                """
+                
+                cur.execute(query, (detected_id,))
+                updated_row = cur.fetchone() # Cek apakah ada baris yang berhasil diupdate
+                
+                conn.commit()
+                cur.close()
+                conn.close()
+                
+                # Logika: Kalau updated_row ada isinya, berarti sukses absen pulang
+                # Kalau kosong, berarti dia belum absen masuk hari ini, atau udah absen pulang duluan
+                if updated_row:
+                    return jsonify({
+                        'status': 'success',
+                        'pesan': f'Absen Pulang Berhasil! Hati-hati di jalan, {nama_user}',
+                        'confidence': round(confidence_result, 2)
+                    }), 200
+                else:
+                    return jsonify({
+                        'status': 'error',
+                        'pesan': 'Gagal: Kamu belum absen masuk hari ini, atau sudah absen pulang!'
+                    }), 200
+
+            else:
+                return jsonify({'status': 'error', 'pesan': 'Wajah tidak cocok dengan akun ini!'}), 200
+        else:
+            return jsonify({'status': 'error', 'pesan': 'Wajah tidak dikenali'}), 200
+
+    except Exception as e:
+        print(f"Error API Absen Pulang: {e}")
+        return jsonify({'status': 'error', 'pesan': f'Database Error: {str(e)}'}), 500
+
+# API RIWAYAT ABSEN
+
+@app.route('/api/riwayat/<int:user_id>', methods=['GET'])
+def api_riwayat(user_id):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Ambil data absensi 30 hari terakhir untuk user tersebut
+        # Kita ambil kolom: tanggal, jam_masuk, jam_pulang, status_kehadiran
+        query = """
+            SELECT tanggal, jam_masuk, jam_pulang, status_kehadiran 
+            FROM absensi 
+            WHERE user_id = %s 
+            ORDER BY tanggal DESC 
+            LIMIT 30
+        """
+        cur.execute(query, (user_id,))
+        rows = cur.fetchall()
+        
+        conn.close()
+        
+        # Kita bungkus datanya jadi bentuk List (Array) biar Flutter gampang bacanya
+        data_riwayat = []
+        for row in rows:
+            data_riwayat.append({
+                "tanggal": str(row[0]),
+                "jam_masuk": str(row[1]).split('.')[0] if row[1] else "-",
+                "jam_pulang": str(row[2]).split('.')[0] if row[2] else "-",
+                "status": row[3]
+            })
+            
+        return jsonify({
+            "status": "success",
+            "pesan": "Berhasil mengambil data riwayat",
+            "data": data_riwayat
+        }), 200
+
+    except Exception as e:
+        print(f"Error API Riwayat: {e}")
+        return jsonify({'status': 'error', 'pesan': f'Database Error: {str(e)}'}), 500
     
     # --- TAMBAHAN KEAMANAN: NO CACHE ---
 @app.after_request
@@ -750,5 +1009,5 @@ def add_header(response):
     return response
 
 if __name__ == '__main__':
-    app.run(debug=True, threaded=True)
-    # app.run(host='0.0.0.0', port=5000, debug=True)
+    # Tambahkan threaded=True agar streaming tidak terganggu saat tombol ditekan
+    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
