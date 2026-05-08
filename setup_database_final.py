@@ -1,5 +1,6 @@
 import psycopg2
 from psycopg2 import sql
+from werkzeug.security import generate_password_hash # TAMBAHAN: Import untuk keamanan password
 
 # --- KONFIGURASI DATABASE ---
 DB_NAME = "skripsi_db"
@@ -9,7 +10,7 @@ DB_HOST = "localhost"
 
 def create_tables():
     commands = (
-        # 1. Tabel DIVISI (Kunci logika Marketing vs Lainnya)
+        # 1. Tabel DIVISI
         """
         CREATE TABLE IF NOT EXISTS divisi (
             id SERIAL PRIMARY KEY,
@@ -17,22 +18,22 @@ def create_tables():
         )
         """,
         
-        # 2. Tabel USERS (Data Karyawan & Admin)
+        # 2. Tabel USERS
         """
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             nama_lengkap VARCHAR(100) NOT NULL,
             username VARCHAR(50) UNIQUE NOT NULL,
-            password VARCHAR(255) NOT NULL, -- Nanti akan di-hash
-            role VARCHAR(20) DEFAULT 'Staff', -- 'Admin' atau 'Staff'
+            password VARCHAR(255) NOT NULL, -- Sekarang diisi dengan Hash
+            role VARCHAR(20) DEFAULT 'Staff',
             divisi_id INTEGER,
-            foto_wajah VARCHAR(255), -- Path file foto dataset
+            foto_wajah VARCHAR(255),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (divisi_id) REFERENCES divisi (id) ON DELETE SET NULL
         )
         """,
         
-        # 3. Tabel LOKASI KANTOR (Pusat Geofencing)
+        # 3. Tabel LOKASI KANTOR (Aman, tidak akan dihapus)
         """
         CREATE TABLE IF NOT EXISTS lokasi_kantor (
             id SERIAL PRIMARY KEY,
@@ -43,8 +44,7 @@ def create_tables():
         )
         """,
 
-        # 4. Tabel ABSENSI (Transaksi Harian)
-        # Satu user, satu baris per hari (Update jam_pulang nanti)
+        # 4. Tabel ABSENSI
         """
         CREATE TABLE IF NOT EXISTS absensi (
             id SERIAL PRIMARY KEY,
@@ -52,27 +52,27 @@ def create_tables():
             tanggal DATE DEFAULT CURRENT_DATE,
             jam_masuk TIME,
             jam_pulang TIME,
-            foto_masuk VARCHAR(255), -- Bukti foto saat absen
+            foto_masuk VARCHAR(255),
             foto_pulang VARCHAR(255),
-            lokasi_masuk VARCHAR(100), -- Koordinat teks
+            lokasi_masuk VARCHAR(100),
             lokasi_pulang VARCHAR(100),
-            status_kehadiran VARCHAR(20), -- 'Hadir', 'Terlambat'
-            durasi_kerja VARCHAR(20), -- Hasil hitungan jam
+            status_kehadiran VARCHAR(20),
+            durasi_kerja VARCHAR(20),
             FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
         """,
 
-        # 5. Tabel PENGAJUAN IZIN (Skenario B)
+        # 5. Tabel PENGAJUAN IZIN
         """
         CREATE TABLE IF NOT EXISTS pengajuan_izin (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             tanggal_mulai DATE NOT NULL,
             tanggal_selesai DATE NOT NULL,
-            tipe_izin VARCHAR(20), -- 'Sakit', 'Cuti', 'Keperluan Pribadi'
+            tipe_izin VARCHAR(20),
             keterangan TEXT,
-            bukti_foto VARCHAR(255), -- Path upload surat dokter
-            status_approval VARCHAR(20) DEFAULT 'Pending', -- 'Pending', 'Disetujui', 'Ditolak'
+            bukti_foto VARCHAR(255),
+            status_approval VARCHAR(20) DEFAULT 'Pending',
             FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
         """
@@ -83,13 +83,13 @@ def create_tables():
         conn = psycopg2.connect(database=DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST)
         cur = conn.cursor()
         
-        print("[INFO] Menghapus tabel lama (jika ada) agar bersih...")
+        print("[INFO] Menghapus tabel lama (KECUALI lokasi_kantor) agar bersih...")
         # Urutan drop penting karena Foreign Key!
         cur.execute("DROP TABLE IF EXISTS pengajuan_izin")
         cur.execute("DROP TABLE IF EXISTS absensi")
         cur.execute("DROP TABLE IF EXISTS users")
         cur.execute("DROP TABLE IF EXISTS divisi")
-        cur.execute("DROP TABLE IF EXISTS lokasi_kantor")
+        # NOTE: DROP TABLE lokasi_kantor KITA HAPUS agar koordinat aman.
 
         print("[INFO] Membuat struktur tabel baru...")
         for command in commands:
@@ -101,25 +101,30 @@ def create_tables():
         # 1. Isi Divisi
         cur.execute("INSERT INTO divisi (nama_divisi) VALUES ('IT'), ('Marketing'), ('Keuangan'), ('HRD')")
         
-        # 2. Isi Lokasi Kantor (Contoh: Monas)
-        cur.execute("INSERT INTO lokasi_kantor (nama_lokasi, latitude, longitude, radius_meter) VALUES ('Kampus Pusat', -6.175392, 106.827153, 50)")
+        # 2. Isi Lokasi Kantor (Dihapus/Dicoment)
+        # Kita tidak melakukan INSERT lagi agar data koordinat yang sudah ada di database tidak double/tertimpa.
+        # Jika tabelnya ternyata kosong, kamu bisa input manual di DBeaver/pgAdmin.
 
-        # 3. Isi User Admin (ID 1) -> Masuk Divisi IT
-        # Password '123' (Nanti di aplikasi kita buat enkripsinya, ini data mentah dulu)
+        # --- GENERATE PASSWORD SECARA AMAN ---
+        # Password '123' diubah menjadi format acak (Hash) agar bisa login di web
+        hashed_password_admin = generate_password_hash('123')
+        hashed_password_staff = generate_password_hash('123')
+
+        # 3. Isi User Admin (ID 1)
         cur.execute("""
             INSERT INTO users (nama_lengkap, username, password, role, divisi_id) 
-            VALUES ('Super Admin', 'admin', '123', 'Admin', 1)
-        """)
+            VALUES ('Super Admin', 'admin', %s, 'Admin', 1)
+        """, (hashed_password_admin,))
         
-        # 4. Isi User Staff Marketing (ID 2) -> Untuk tes fitur bebas lokasi
+        # 4. Isi User Staff Marketing (ID 2)
         cur.execute("""
             INSERT INTO users (nama_lengkap, username, password, role, divisi_id) 
-            VALUES ('Budi Marketing', 'budi', '123', 'Staff', 2)
-        """)
+            VALUES ('Fendi Andriyanto', 'fendi', %s, 'Staff', 2)
+        """, (hashed_password_staff,))
 
         cur.close()
         conn.commit()
-        print("[INFO] SELESAI! Database skripsi_db sudah siap dengan struktur final.")
+        print("[INFO] SELESAI! Database skripsi_db berhasil direset dengan password yang sudah aman.")
         
     except (Exception, psycopg2.DatabaseError) as error:
         print(f"[ERROR] {error}")

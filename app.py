@@ -7,13 +7,13 @@ from datetime import datetime
 from werkzeug.utils import secure_filename
 import numpy as np 
 from PIL import Image
+from werkzeug.security import generate_password_hash, check_password_hash
+import threading
 
-# Variabel Global untuk menyimpan frame terakhir
 global_frame = None
-
-# --- GLOBAL VARIABLES ---
 last_detected_id = 0 
 last_detected_name = "Unknown"
+frame_lock = threading.Lock() # <-- TAMBAHKAN INI
 
 app = Flask(__name__)
 app.secret_key = 'rahasia_skripsi_pendi' # Kunci untuk Session & Flash
@@ -150,7 +150,9 @@ def train_model_web():
             for (x, y, w, h) in faces:
                 faceSamples.append(img_numpy[y:y+h, x:x+w])
                 ids.append(id)
-        except: pass
+        except Exception as e: 
+            print(f"[WARNING] Gagal memproses gambar {imagePath}: {e}")
+            continue # Lanjut ke foto berikutnya
             
     if len(ids) > 0:
         recognizer.train(faceSamples, np.array(ids))
@@ -185,8 +187,9 @@ def index():
         conn.close()
 
         if user:
-            # Validasi Password (Sementara Plain Text sesuai setup awal)
-            if user[3] == password:
+            # --- KODE BARU: Validasi menggunakan check_password_hash ---
+            # user[3] adalah password dari database
+            if check_password_hash(user[3], password):
                 # LOGIN SUKSES: Simpan data ke Session
                 session['user_id'] = user[0]
                 session['nama'] = user[1]
@@ -256,17 +259,51 @@ def dashboard():
 
 @app.route('/riwayat')
 def riwayat():
-    if 'user_id' not in session: return redirect(url_for('index'))
+    if 'user_id' not in session: 
+        return redirect(url_for('index'))
+    
+    # 1. Setup Konfigurasi Waktu Real-time
+    now = datetime.now()
+    nama_bulan = {
+        1: "Januari", 2: "Februari", 3: "Maret", 4: "April",
+        5: "Mei", 6: "Juni", 7: "Juli", 8: "Agustus",
+        9: "September", 10: "Oktober", 11: "November", 12: "Desember"
+    }
+
+    # 2. Ambil parameter dari URL, default ke bulan & tahun saat ini
+    # type=int memastikan data dikonversi ke angka untuk query database
+    bln = request.args.get('bulan', default=now.month, type=int)
+    thn = request.args.get('tahun', default=now.year, type=int)
     
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("""
+    
+    # 3. Query PostgreSQL menggunakan EXTRACT
+    # Kita memfilter data berdasarkan user_id, bulan, dan tahun
+    query = """
         SELECT tanggal, jam_masuk, jam_pulang, status_kehadiran, lokasi_masuk 
-        FROM absensi WHERE user_id = %s ORDER BY tanggal DESC LIMIT 30
-    """, (session['user_id'],)) # Pakai ID dari session
+        FROM absensi 
+        WHERE user_id = %s 
+        AND EXTRACT(MONTH FROM tanggal) = %s 
+        AND EXTRACT(YEAR FROM tanggal) = %s
+        ORDER BY tanggal DESC
+    """
+    
+    cur.execute(query, (session['user_id'], bln, thn))
     data = cur.fetchall()
     conn.close()
-    return render_template('riwayat.html', data_absen=data)
+
+    # Membuat daftar pilihan tahun (misal: 3 tahun kebelakang)
+    years = range(now.year, now.year - 3, -1) 
+
+    return render_template(
+        'riwayat.html',
+        data_absen=data,
+        bln=bln,
+        thn=thn,
+        nama_bulan=nama_bulan,
+        years=years
+    )
 
 @app.route('/izin', methods=['GET', 'POST'])
 def izin():
@@ -303,121 +340,138 @@ def izin():
 
 # --- ROUTES ADMIN ---
 
-@app.route('/admin/dashboard')
+from flask import request
+from datetime import datetime
+
+@app.route('/admin/dashboard', methods=['GET', 'POST'])
 def admin_dashboard():
-    # 1. Proteksi Admin
     if 'user_id' not in session or session['role'] != 'Admin':
         flash('Akses Ditolak!', 'danger')
         return redirect(url_for('index'))
 
     conn = get_db_connection()
     cur = conn.cursor()
-    
-    # --- A. DATA STATISTIK ---
-    # Hitung Total User (Role Staff)
+
+    # Inisialisasi variabel filter
+    tanggal = request.form.get('tanggal')
+    bln = request.form.get('bulan')
+    thn = request.form.get('tahun')
+
+    where_clause = ""
+    params = []
+
+    # Logika Filter
+    if tanggal:
+        where_clause = "DATE(a.tanggal) = %s"
+        params.append(tanggal)
+    elif bln and thn:
+        where_clause = "MONTH(a.tanggal) = %s AND YEAR(a.tanggal) = %s"
+        params.extend([bln, thn])
+    elif thn:
+        where_clause = "YEAR(a.tanggal) = %s"
+        params.append(thn)
+    else:
+        # Default: Hari ini
+        today = datetime.today().strftime('%Y-%m-%d')
+        where_clause = "DATE(a.tanggal) = %s"
+        params.append(today)
+
+    # Statistik Karyawan
     cur.execute("SELECT COUNT(*) FROM users WHERE role = 'Staff'")
     total_user = cur.fetchone()[0]
-    
-    # Hitung Yang Hadir Hari Ini
-    cur.execute("SELECT COUNT(*) FROM absensi WHERE tanggal = CURRENT_DATE AND status_kehadiran = 'Hadir'")
+
+    # Hitung Hadir berdasarkan filter
+    query_hadir = f"SELECT COUNT(*) FROM absensi a WHERE {where_clause} AND status_kehadiran = 'Hadir'"
+    cur.execute(query_hadir, params)
     hadir = cur.fetchone()[0]
-    
-    # Hitung Yang Izin/Sakit Hari Ini (Yang sudah di-approve)
-    # Note: Status approval 'Disetujui' dan tanggal masuk dalam range izin
-    cur.execute("""
-        SELECT COUNT(*) FROM pengajuan_izin 
-        WHERE status_approval = 'Disetujui' 
-        AND CURRENT_DATE BETWEEN tanggal_mulai AND tanggal_selesai
-    """)
-    izin = cur.fetchone()[0]
 
     stats = {
         'total_user': total_user,
-        'hadir': hadir,
-        'izin': izin
+        'hadir': hadir
     }
 
-    # --- B. DATA PENGAJUAN IZIN (PENDING) ---
-    # Ambil daftar izin yang butuh persetujuan
-    cur.execute("""
-        SELECT p.id, u.nama_lengkap, d.nama_divisi, p.tipe_izin, p.keterangan, p.bukti_foto
-        FROM pengajuan_izin p
-        JOIN users u ON p.user_id = u.id
-        LEFT JOIN divisi d ON u.divisi_id = d.id
-        WHERE p.status_approval = 'Pending'
-        ORDER BY p.id ASC
-    """)
-    list_izin = cur.fetchall()
-
-    # --- C. DATA LIVE PRESENSI HARI INI ---
-    # Siapa saja yang sudah absen hari ini?
-    cur.execute("""
-        SELECT u.nama_lengkap, a.jam_masuk, a.jam_pulang, d.nama_divisi
+    # List Absensi berdasarkan filter
+    query_absen = f"""
+        SELECT u.nama_lengkap, a.jam_masuk, a.jam_pulang, d.nama_divisi, a.tanggal
         FROM absensi a
         JOIN users u ON a.user_id = u.id
         LEFT JOIN divisi d ON u.divisi_id = d.id
-        WHERE a.tanggal = CURRENT_DATE
-        ORDER BY a.jam_masuk DESC
-    """)
+        WHERE {where_clause}
+        ORDER BY a.tanggal DESC, a.jam_masuk DESC
+    """
+    cur.execute(query_absen, params)
     live_absen = cur.fetchall()
-    
+
     conn.close()
 
+    nama_bulan = {
+        1: "Januari", 2: "Februari", 3: "Maret", 4: "April",
+        5: "Mei", 6: "Juni", 7: "Juli", 8: "Agustus",
+        9: "September", 10: "Oktober", 11: "November", 12: "Desember"
+    }
+
+    tgl_input = datetime.today().strftime('%Y-%m-%d')
     tgl_sekarang = datetime.now().strftime('%d %B %Y')
 
-    return render_template('admin_dashboard.html', 
-                           stats=stats, 
-                           list_izin=list_izin, 
-                           live_absen=live_absen,
-                           tgl_sekarang=tgl_sekarang)
+    return render_template(
+        'admin_dashboard.html',
+        stats=stats,
+        live_absen=live_absen,
+        tgl_sekarang=tgl_sekarang,
+        tanggal=tanggal,
+        bln=int(bln) if bln else None,
+        thn=int(thn) if thn else None,
+        nama_bulan=nama_bulan,
+        tgl_input=tgl_input
+    )
 
-# --- ROUTE AKSI ADMIN (APPROVE / REJECT) ---
+# # --- ROUTE AKSI ADMIN (APPROVE / REJECT) ---
 
-@app.route('/admin/approve/<int:id>')
-def approve_izin(id):
-    # Proteksi Admin
-    if 'user_id' not in session or session['role'] != 'Admin':
-        return redirect(url_for('index'))
+# @app.route('/admin/approve/<int:id>')
+# def approve_izin(id):
+#     # Proteksi Admin
+#     if 'user_id' not in session or session['role'] != 'Admin':
+#         return redirect(url_for('index'))
 
-    conn = get_db_connection()
-    cur = conn.cursor()
+#     conn = get_db_connection()
+#     cur = conn.cursor()
     
-    # Update Status jadi Disetujui
-    try:
-        cur.execute("UPDATE pengajuan_izin SET status_approval = 'Disetujui' WHERE id = %s", (id,))
-        conn.commit()
-        flash('Pengajuan Izin berhasil DISETUJUI.', 'success')
-    except Exception as e:
-        print(e)
-        flash('Gagal update database.', 'danger')
+#     # Update Status jadi Disetujui
+#     try:
+#         cur.execute("UPDATE pengajuan_izin SET status_approval = 'Disetujui' WHERE id = %s", (id,))
+#         conn.commit()
+#         flash('Pengajuan Izin berhasil DISETUJUI.', 'success')
+#     except Exception as e:
+#         print(e)
+#         flash('Gagal update database.', 'danger')
         
-    cur.close()
-    conn.close()
+#     cur.close()
+#     conn.close()
     
-    return redirect(url_for('admin_dashboard'))
+#     return redirect(url_for('admin_dashboard'))
 
-@app.route('/admin/reject/<int:id>')
-def reject_izin(id):
-    # Proteksi Admin
-    if 'user_id' not in session or session['role'] != 'Admin':
-        return redirect(url_for('index'))
+# @app.route('/admin/reject/<int:id>')
+# def reject_izin(id):
+#     # Proteksi Admin
+#     if 'user_id' not in session or session['role'] != 'Admin':
+#         return redirect(url_for('index'))
 
-    conn = get_db_connection()
-    cur = conn.cursor()
+#     conn = get_db_connection()
+#     cur = conn.cursor()
     
-    # Update Status jadi Ditolak
-    try:
-        cur.execute("UPDATE pengajuan_izin SET status_approval = 'Ditolak' WHERE id = %s", (id,))
-        conn.commit()
-        flash('Pengajuan Izin telah DITOLAK.', 'warning')
-    except Exception as e:
-        print(e)
-        flash('Gagal update database.', 'danger')
+#     # Update Status jadi Ditolak
+#     try:
+#         cur.execute("UPDATE pengajuan_izin SET status_approval = 'Ditolak' WHERE id = %s", (id,))
+#         conn.commit()
+#         flash('Pengajuan Izin telah DITOLAK.', 'warning')
+#     except Exception as e:
+#         print(e)
+#         flash('Gagal update database.', 'danger')
         
-    cur.close()
-    conn.close()
+#     cur.close()
+#     conn.close()
     
-    return redirect(url_for('admin_dashboard'))
+#     return redirect(url_for('admin_dashboard'))
 
 # --- API & SYSTEM ROUTES ---
 
@@ -440,16 +494,18 @@ def video_feed():
                     # Tapi skip loop ini dan coba baca lagi frame berikutnya.
                     continue 
                 
-                # Simpan ke global untuk fitur ambil foto
-                global_frame = frame.copy()
+                # --- KODE BARU: Gunakan Lock saat memperbarui variabel global ---
+                with frame_lock:
+                    global_frame = frame.copy()
 
                 # --- Logika Deteksi Wajah ---
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 faces = face_detector.detectMultiScale(gray, 1.2, 5)
                 
                 if len(faces) == 0:
-                    last_detected_id = 0
-                    last_detected_name = "Unknown"
+                    with frame_lock:
+                        last_detected_id = 0
+                        last_detected_name = "Unknown"
                 
                 for (x, y, w, h) in faces:
                     cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
@@ -509,18 +565,23 @@ def cek_jarak_realtime():
 def proses_absen():
     global last_detected_id, last_detected_name
     
+    # --- KODE BARU: Kunci sebentar saat membaca data dari memori ---
+    # Ini mencegah bentrok jika ada 2 orang absen bersamaan
+    with frame_lock:
+        current_id = last_detected_id
+        current_name = last_detected_name
+    
     # --- VALIDASI 1: APAKAH ADA WAJAH? ---
-    if last_detected_id == 0:
+    if current_id == 0:
         return jsonify({'status': 'error', 'pesan': 'Wajah tidak dikenali! Harap posisikan wajah dengan benar.'})
 
     # --- VALIDASI 2: ANTI-JOKI (PENTING!) ---
     # Cek apakah ID Wajah (AI) sama dengan ID Akun yang Login (Session)
-    # Jangan sampai Budi login tapi yang absen wajahnya Anto.
     if 'user_id' in session:
-        if session['user_id'] != last_detected_id:
+        if session['user_id'] != current_id:
             return jsonify({
                 'status': 'error', 
-                'pesan': f'Wajah tidak cocok! Anda login sebagai {session["nama"]}, tapi terdeteksi wajah {last_detected_name}.'
+                'pesan': f'Wajah tidak cocok! Anda login sebagai {session["nama"]}, tapi terdeteksi wajah {current_name}.'
             })
     else:
         return jsonify({'status': 'error', 'pesan': 'Sesi habis. Silakan login ulang.'})
@@ -542,7 +603,6 @@ def proses_absen():
         radius_max = int(kantor[2])
         
         # Logika Pengecualian Marketing (Opsional)
-        # Jika user divisi Marketing (ID 2), kita bisa skip validasi jarak
         is_marketing = (session.get('divisi_id') == 2) 
 
         if jarak > radius_max and not is_marketing:
@@ -552,11 +612,11 @@ def proses_absen():
 
         # --- LOGIKA INTI (SKENARIO A, B, C) ---
         
-        # Cek data hari ini
+        # Cek data hari ini menggunakan current_id
         cur.execute("""
             SELECT id, jam_masuk, jam_pulang FROM absensi 
             WHERE user_id = %s AND tanggal = CURRENT_DATE
-        """, (last_detected_id,))
+        """, (current_id,))
         
         data_absen = cur.fetchone()
         waktu_sekarang = datetime.now().strftime('%H:%M:%S')
@@ -566,7 +626,7 @@ def proses_absen():
             cur.execute("""
                 INSERT INTO absensi (user_id, jam_masuk, lokasi_masuk, status_kehadiran)
                 VALUES (%s, %s, %s, %s)
-            """, (last_detected_id, waktu_sekarang, f"{user_lat},{user_long}", "Hadir"))
+            """, (current_id, waktu_sekarang, f"{user_lat},{user_long}", "Hadir"))
             conn.commit()
             pesan = f"Absen MASUK Berhasil! Semangat, {session['nama']}."
 
@@ -596,28 +656,33 @@ def proses_absen():
         })
 
     except Exception as e:
-        print(e)
+        print(f"[ERROR DB] Absensi gagal: {e}")
         return jsonify({'status': 'error', 'pesan': 'Terjadi kesalahan sistem database.'})
     
 @app.route('/admin/laporan', methods=['GET', 'POST'])
 def laporan():
-    # 1. Proteksi Admin
     if 'user_id' not in session or session['role'] != 'Admin':
         return redirect(url_for('index'))
+
+    now = datetime.now()
+    nama_bulan = {
+        1: "Januari", 2: "Februari", 3: "Maret", 4: "April",
+        5: "Mei", 6: "Juni", 7: "Juli", 8: "Agustus",
+        9: "September", 10: "Oktober", 11: "November", 12: "Desember"
+    }
+
+    # Ambil periode: Cek POST dulu, kalau tidak ada cek GET, kalau tidak ada pake NOW
+    if request.method == 'POST':
+        selected_month = int(request.form.get('bulan', now.month))
+        selected_year = int(request.form.get('tahun', now.year))
+    else:
+        selected_month = request.args.get('bulan', default=now.month, type=int)
+        selected_year = request.args.get('tahun', default=now.year, type=int)
 
     conn = get_db_connection()
     cur = conn.cursor()
 
-    # 2. Tentukan Periode (Default: Bulan & Tahun Sekarang)
-    now = datetime.now()
-    if request.method == 'POST':
-        selected_month = int(request.form['bulan'])
-        selected_year = int(request.form['tahun'])
-    else:
-        selected_month = now.month
-        selected_year = now.year
-
-    # 3. Query Super: Ambil semua user staff
+    # Query User Staff
     cur.execute("""
         SELECT u.id, u.nama_lengkap, d.nama_divisi 
         FROM users u 
@@ -629,13 +694,11 @@ def laporan():
     
     laporan_data = []
 
-    # 4. Loop setiap user untuk hitung statistiknya di bulan terpilih
     for user in users:
-        user_id = user[0]
-        nama = user[1]
-        divisi = user[2] if user[2] else "-"
+        user_id, nama, divisi = user
+        divisi = divisi if divisi else "-"
         
-        # A. Hitung HADIR
+        # Hitung HADIR
         cur.execute("""
             SELECT COUNT(*) FROM absensi 
             WHERE user_id = %s 
@@ -645,7 +708,7 @@ def laporan():
         """, (user_id, selected_month, selected_year))
         hadir = cur.fetchone()[0]
 
-        # B. Hitung TERLAMBAT (Bonus: Misal masuk > 08:00)
+        # Hitung TERLAMBAT
         cur.execute("""
             SELECT COUNT(*) FROM absensi 
             WHERE user_id = %s 
@@ -655,36 +718,24 @@ def laporan():
         """, (user_id, selected_month, selected_year))
         telat = cur.fetchone()[0]
 
-        # C. Hitung IZIN/SAKIT (Approved Only)
-        cur.execute("""
-            SELECT COUNT(*) FROM pengajuan_izin 
-            WHERE user_id = %s 
-            AND status_approval = 'Disetujui'
-            AND (EXTRACT(MONTH FROM tanggal_mulai) = %s OR EXTRACT(MONTH FROM tanggal_selesai) = %s)
-        """, (user_id, selected_month, selected_month))
-        izin = cur.fetchone()[0]
-        
-        # D. Hitung ALPHA (Sederhana: 20 hari kerja - Hadir - Izin)
-        # Ini rumus kasar, bisa disesuaikan.
-        hari_kerja = 20 
-        alpha = hari_kerja - hadir - izin
-        if alpha < 0: alpha = 0 # Biar gak minus kalau rajin lembur :D
-
         laporan_data.append({
             'nama': nama,
             'divisi': divisi,
             'hadir': hadir,
-            'telat': telat,
-            'izin': izin,
-            'alpha': alpha
+            'telat': telat
         })
 
     conn.close()
+
+    # Daftar tahun untuk filter (3 tahun terakhir)
+    years = range(now.year, now.year - 3, -1)
 
     return render_template('laporan.html', 
                            data_laporan=laporan_data, 
                            bln=selected_month, 
                            thn=selected_year,
+                           nama_bulan=nama_bulan,
+                           years=years,
                            tgl_cetak=now.strftime("%d %B %Y"))
 
 # --- MANAJEMEN USER (CRUD) ---
@@ -705,11 +756,14 @@ def kelola_users():
         divisi_id = request.form['divisi']
         role = request.form['role'] 
         
+        # --- KODE BARU: Mengacak password sebelum masuk database ---
+        hashed_password = generate_password_hash(password)
+        
         try:
             cur.execute("""
                 INSERT INTO users (nama_lengkap, username, password, role, divisi_id)
                 VALUES (%s, %s, %s, %s, %s)
-            """, (nama, username, password, role, divisi_id))
+            """, (nama, username, hashed_password, role, divisi_id)) # Gunakan hashed_password
             conn.commit()
             flash('User berhasil ditambahkan! Silakan ambil dataset wajahnya.', 'success')
         except Exception as e:
@@ -724,6 +778,43 @@ def kelola_users():
     
     conn.close()
     return render_template('kelola_users.html', users=users, divisi_list=divisi_list)
+
+@app.route('/admin/edit_user/<int:id>', methods=['POST'])
+def edit_user(id):
+    if 'user_id' not in session or session['role'] != 'Admin':
+        return redirect(url_for('index'))
+
+    nama = request.form['nama']
+    divisi_id = request.form['divisi']
+    role = request.form['role']
+    new_password = request.form['password']
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    try:
+        if new_password:  # Jika admin mengisi kolom password
+            hashed_password = generate_password_hash(new_password)
+            cur.execute("""
+                UPDATE users 
+                SET nama_lengkap = %s, divisi_id = %s, role = %s, password = %s 
+                WHERE id = %s
+            """, (nama, divisi_id, role, hashed_password, id))
+        else:  # Jika password dikosongkan
+            cur.execute("""
+                UPDATE users 
+                SET nama_lengkap = %s, divisi_id = %s, role = %s 
+                WHERE id = %s
+            """, (nama, divisi_id, role, id))
+            
+        conn.commit()
+        flash(f'Data {nama} berhasil diperbarui!', 'success')
+    except Exception as e:
+        flash(f'Gagal update user: {e}', 'danger')
+    finally:
+        conn.close()
+
+    return redirect(url_for('kelola_users'))
 
 @app.route('/admin/hapus_user/<int:id>')
 def hapus_user(id):
@@ -740,265 +831,6 @@ def hapus_user(id):
     
     flash('User berhasil dihapus.', 'warning')
     return redirect(url_for('kelola_users'))
-
-# API MOBILE APP (FLUTTER)
-
-@app.route('/api/login', methods=['POST'])
-def api_login():
-    try:
-        # 1. Terima data JSON dari Flutter
-        data = request.get_json()
-        
-        # Cek apakah data dikirim?
-        if not data:
-            return jsonify({'status': 'error', 'pesan': 'Data tidak ditemukan'}), 400
-
-        input_username = data.get('username')
-        input_password = data.get('password')
-
-        # 2. Cek ke Database
-        conn = get_db_connection()
-        cur = conn.cursor()
-        # Ambil data user berdasarkan username
-        cur.execute("SELECT id, username, password, nama_lengkap, role FROM users WHERE username = %s", (input_username,))
-        user = cur.fetchone()
-        conn.close()
-
-        # 3. Logika Validasi Password
-        if user:
-            # user[2] adalah password dari DB
-            # CATATAN: Jika kamu pakai hash (werkzeug), gunakan check_password_hash(user[2], input_password)
-            # Jika masih plain text (skripsi sederhana), pakai perbandingan langsung:
-            if user[2] == input_password:
-                
-                # LOGIN SUKSES!
-                # Kirim balik data user ke Flutter (JANGAN KIRIM PASSWORDNYA!)
-                return jsonify({
-                    'status': 'success',
-                    'pesan': 'Login Berhasil',
-                    'data': {
-                        'user_id': user[0],
-                        'nama': user[3],
-                        'role': user[4]
-                    }
-                }), 200
-            else:
-                # Password Salah
-                return jsonify({'status': 'error', 'pesan': 'Password Salah'}), 401
-        else:
-            # Username Tidak Ditemukan
-            return jsonify({'status': 'error', 'pesan': 'Username tidak terdaftar'}), 401
-
-    except Exception as e:
-        print(f"Error API Login: {e}")
-        return jsonify({'status': 'error', 'pesan': 'Terjadi kesalahan server'}), 500
-    
-# API ABSENSI
-
-@app.route('/api/absen', methods=['POST'])
-def api_absen():
-    try:
-        # 1. Validasi Input Gambar
-        if 'image' not in request.files:
-            return jsonify({'status': 'error', 'pesan': 'Tidak ada file gambar'}), 400
-            
-        file = request.files['image']
-        user_id_claimed = request.form.get('user_id')
-        
-        if not user_id_claimed:
-             return jsonify({'status': 'error', 'pesan': 'User ID tidak ditemukan'}), 400
-
-        # 2. Proses Gambar (OpenCV)
-        filestr = file.read()
-        npimg = np.frombuffer(filestr, np.uint8)
-        frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-        
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_detector.detectMultiScale(gray, 1.1, 4)
-        
-        if len(faces) == 0:
-            return jsonify({'status': 'error', 'pesan': 'Wajah tidak terdeteksi'}), 200
-            
-        # 3. Prediksi Wajah
-        detected_id = 0
-        confidence_result = 100
-        
-        for (x, y, w, h) in faces:
-            id_prediksi, confidence = recognizer.predict(gray[y:y+h, x:x+w])
-            detected_id = id_prediksi
-            confidence_result = confidence
-            
-        # 4. Cek Kecocokan & Simpan ke Database
-        if confidence_result < 60:
-            if str(detected_id) == str(user_id_claimed):
-                nama_user = names.get(detected_id, "Unknown")
-                
-                conn = get_db_connection()
-                cur = conn.cursor()
-
-                # ==========================================
-                # ✅ TAMBAHAN BARU: CEK APAKAH SUDAH ABSEN HARI INI
-                # ==========================================
-                cur.execute("SELECT id FROM absensi WHERE user_id = %s AND tanggal = CURRENT_DATE", (detected_id,))
-                sudah_absen = cur.fetchone()
-
-                if sudah_absen:
-                    # Kalau sudah ada datanya, TOLAK!
-                    cur.close()
-                    conn.close()
-                    return jsonify({'status': 'error', 'pesan': f'Halo {nama_user}, kamu SUDAH Absen Masuk hari ini!'}), 200
-
-                # ==========================================
-                # JIKA BELUM ABSEN, BARU SIMPAN (INSERT)
-                # ==========================================
-                query = """
-                    INSERT INTO absensi (user_id, tanggal, jam_masuk, status_kehadiran) 
-                    VALUES (%s, CURRENT_DATE, CURRENT_TIME, 'Hadir')
-                """
-                cur.execute(query, (detected_id,))
-                conn.commit()
-                
-                cur.close()
-                conn.close()
-                
-                return jsonify({
-                    'status': 'success',
-                    'pesan': f'Absen Masuk Berhasil! Halo {nama_user}',
-                    'confidence': round(confidence_result, 2)
-                }), 200
-            else:
-                return jsonify({'status': 'error', 'pesan': 'Wajah tidak cocok dengan akun ini!'}), 200
-        else:
-            return jsonify({'status': 'error', 'pesan': 'Wajah tidak dikenali'}), 200
-
-    except Exception as e:
-        print(f"Error API Absen: {e}")
-        # Kembalikan pesan error biar kita tau salahnya dimana
-        return jsonify({'status': 'error', 'pesan': f'Database Error: {str(e)}'}), 500
-    
-# API ABSENSI PULANG
-
-@app.route('/api/absen_pulang', methods=['POST'])
-def api_absen_pulang():
-    try:
-        # 1. Validasi Input Gambar
-        if 'image' not in request.files:
-            return jsonify({'status': 'error', 'pesan': 'Tidak ada file gambar'}), 400
-            
-        file = request.files['image']
-        user_id_claimed = request.form.get('user_id')
-        
-        if not user_id_claimed:
-             return jsonify({'status': 'error', 'pesan': 'User ID tidak ditemukan'}), 400
-
-        # 2. Proses Gambar (OpenCV)
-        filestr = file.read()
-        npimg = np.frombuffer(filestr, np.uint8)
-        frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-        
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_detector.detectMultiScale(gray, 1.1, 4)
-        
-        if len(faces) == 0:
-            return jsonify({'status': 'error', 'pesan': 'Wajah tidak terdeteksi'}), 200
-            
-        # 3. Prediksi Wajah
-        detected_id = 0
-        confidence_result = 100
-        
-        for (x, y, w, h) in faces:
-            id_prediksi, confidence = recognizer.predict(gray[y:y+h, x:x+w])
-            detected_id = id_prediksi
-            confidence_result = confidence
-            
-        # 4. Cek Kecocokan & Update Database
-        if confidence_result < 60:
-            if str(detected_id) == str(user_id_claimed):
-                nama_user = names.get(detected_id, "Unknown")
-                
-                conn = get_db_connection()
-                cur = conn.cursor()
-
-                # --- QUERY SQL UPDATE ---
-                # Cari baris absen hari ini yang jam_pulangnya masih kosong (NULL atau '-')
-                query = """
-                    UPDATE absensi 
-                    SET jam_pulang = CURRENT_TIME 
-                    WHERE user_id = %s AND tanggal = CURRENT_DATE AND jam_pulang IS NULL
-                    RETURNING id;
-                """
-                
-                cur.execute(query, (detected_id,))
-                updated_row = cur.fetchone() # Cek apakah ada baris yang berhasil diupdate
-                
-                conn.commit()
-                cur.close()
-                conn.close()
-                
-                # Logika: Kalau updated_row ada isinya, berarti sukses absen pulang
-                # Kalau kosong, berarti dia belum absen masuk hari ini, atau udah absen pulang duluan
-                if updated_row:
-                    return jsonify({
-                        'status': 'success',
-                        'pesan': f'Absen Pulang Berhasil! Hati-hati di jalan, {nama_user}',
-                        'confidence': round(confidence_result, 2)
-                    }), 200
-                else:
-                    return jsonify({
-                        'status': 'error',
-                        'pesan': 'Gagal: Kamu belum absen masuk hari ini, atau sudah absen pulang!'
-                    }), 200
-
-            else:
-                return jsonify({'status': 'error', 'pesan': 'Wajah tidak cocok dengan akun ini!'}), 200
-        else:
-            return jsonify({'status': 'error', 'pesan': 'Wajah tidak dikenali'}), 200
-
-    except Exception as e:
-        print(f"Error API Absen Pulang: {e}")
-        return jsonify({'status': 'error', 'pesan': f'Database Error: {str(e)}'}), 500
-
-# API RIWAYAT ABSEN
-
-@app.route('/api/riwayat/<int:user_id>', methods=['GET'])
-def api_riwayat(user_id):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        # Ambil data absensi 30 hari terakhir untuk user tersebut
-        # Kita ambil kolom: tanggal, jam_masuk, jam_pulang, status_kehadiran
-        query = """
-            SELECT tanggal, jam_masuk, jam_pulang, status_kehadiran 
-            FROM absensi 
-            WHERE user_id = %s 
-            ORDER BY tanggal DESC 
-            LIMIT 30
-        """
-        cur.execute(query, (user_id,))
-        rows = cur.fetchall()
-        
-        conn.close()
-        
-        # Kita bungkus datanya jadi bentuk List (Array) biar Flutter gampang bacanya
-        data_riwayat = []
-        for row in rows:
-            data_riwayat.append({
-                "tanggal": str(row[0]),
-                "jam_masuk": str(row[1]).split('.')[0] if row[1] else "-",
-                "jam_pulang": str(row[2]).split('.')[0] if row[2] else "-",
-                "status": row[3]
-            })
-            
-        return jsonify({
-            "status": "success",
-            "pesan": "Berhasil mengambil data riwayat",
-            "data": data_riwayat
-        }), 200
-
-    except Exception as e:
-        print(f"Error API Riwayat: {e}")
-        return jsonify({'status': 'error', 'pesan': f'Database Error: {str(e)}'}), 500
     
     # --- TAMBAHAN KEAMANAN: NO CACHE ---
 @app.after_request

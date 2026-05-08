@@ -1,51 +1,81 @@
 {% extends "base.html" %}
 
 {% block content %}
-
-<div class="container">
+<div class="container mt-4">
     <div class="card shadow-sm border-0">
-        <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-            <h5 class="m-0 fw-bold text-primary"><i class="fa-solid fa-clock-rotate-left me-2"></i>Riwayat Kehadiran</h5>
-            <span class="badge bg-secondary">Bulan Ini</span>
+        <!-- Header dengan Filter -->
+        <div class="card-header bg-white py-3">
+            <div class="row align-items-center">
+                <div class="col-lg-5 col-md-12 mb-2 mb-lg-0">
+                    <h5 class="m-0 fw-bold text-primary">
+                        <i class="fa-solid fa-clock-rotate-left me-2"></i>
+                        Riwayat: <span class="text-dark">{{ nama_bulan[bln] }} {{ thn }}</span>
+                    </h5>
+                </div>
+                <div class="col-lg-7 col-md-12">
+                    <form method="GET" action="{{ url_for('riwayat') }}" class="row g-2 justify-content-lg-end">
+                        <div class="col-auto">
+                            <select name="bulan" class="form-select form-select-sm shadow-none">
+                                {% for num, nama in nama_bulan.items() %}
+                                    <option value="{{ num }}" {% if bln == num %}selected{% endif %}>{{ nama }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-auto">
+                            <select name="tahun" class="form-select form-select-sm shadow-none">
+                                {% for y in years %}
+                                    <option value="{{ y }}" {% if thn == y %}selected{% endif %}>{{ y }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-auto">
+                            <button type="submit" class="btn btn-primary btn-sm px-3">
+                                <i class="fa-solid fa-filter me-1"></i> Filter
+                            </button>
+                            <a href="{{ url_for('riwayat') }}" class="btn btn-light btn-sm border">
+                                <i class="fa-solid fa-arrows-rotate"></i>
+                            </a>
+                        </div>
+                    </form>
+                </div>
+            </div>
         </div>
+
+        <!-- Tabel Riwayat -->
         <div class="card-body p-0">
             <div class="table-responsive">
-                <table class="table table-hover table-striped align-middle mb-0">
-                    <thead class="bg-light">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="bg-light text-secondary">
                         <tr>
-                            <th class="ps-4">Tanggal</th>
-                            <th>Jam Masuk</th>
-                            <th>Jam Pulang</th>
-                            <th>Status</th>
-                            <th>Keterangan</th>
+                            <th class="ps-4 border-0">Tanggal</th>
+                            <th class="border-0">Masuk</th>
+                            <th class="border-0">Pulang</th>
+                            <th class="border-0">Status</th>
+                            <th class="border-0">Lokasi</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% if data_absen %}
                             {% for row in data_absen %}
                             <tr>
-                                <td class="ps-4 fw-bold">{{ row[0].strftime('%d %B %Y') }}</td>
-                                
+                                <td class="ps-4 fw-bold text-dark">{{ row[0].strftime('%d %b %Y') }}</td>
                                 <td class="text-success fw-bold">
                                     {% if row[1] %}{{ row[1].strftime('%H:%M') }}{% else %}--:--{% endif %}
                                 </td>
-                                
                                 <td class="text-danger fw-bold">
                                     {% if row[2] %}{{ row[2].strftime('%H:%M') }}{% else %}--:--{% endif %}
                                 </td>
-
                                 <td>
                                     {% if 'Hadir' in row[3] %}
-                                        <span class="badge bg-success rounded-pill px-3">Hadir</span>
+                                        <span class="badge bg-success-subtle text-success rounded-pill px-3">Hadir</span>
                                     {% elif 'Izin' in row[3] or 'Sakit' in row[3] %}
-                                        <span class="badge bg-warning text-dark rounded-pill px-3">{{ row[3] }}</span>
+                                        <span class="badge bg-warning-subtle text-warning-emphasis rounded-pill px-3">{{ row[3] }}</span>
                                     {% else %}
-                                        <span class="badge bg-danger rounded-pill px-3">{{ row[3] }}</span>
+                                        <span class="badge bg-danger-subtle text-danger rounded-pill px-3">{{ row[3] }}</span>
                                     {% endif %}
                                 </td>
-                                
                                 <td class="small text-muted">
-                                    <i class="fa-solid fa-map-pin me-1"></i> 
+                                    <i class="fa-solid fa-location-dot me-1"></i> 
                                     {% if row[4] %} {{ row[4] }} {% else %} - {% endif %}
                                 </td>
                             </tr>
@@ -53,8 +83,10 @@
                         {% else %}
                             <tr>
                                 <td colspan="5" class="text-center py-5 text-muted">
-                                    <i class="fa-solid fa-box-open fs-1 mb-3 opacity-25"></i>
-                                    <p>Belum ada data absensi.</p>
+                                    <div class="opacity-50 mb-2">
+                                        <i class="fa-solid fa-calendar-xmark fs-1"></i>
+                                    </div>
+                                    <p class="mb-0">Tidak ada data kehadiran untuk bulan {{ nama_bulan[bln] }} {{ thn }}.</p>
                                 </td>
                             </tr>
                         {% endif %}
@@ -63,7 +95,7 @@
             </div>
         </div>
         <div class="card-footer bg-white text-muted small text-center py-3">
-            Menampilkan data 30 hari terakhir.
+            Laporan absensi ini dihasilkan secara otomatis oleh sistem.
         </div>
     </div>
 </div>
