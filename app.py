@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image
 from werkzeug.security import generate_password_hash, check_password_hash
 import threading
+import base64
 
 global_frame = None
 last_detected_id = 0 
@@ -38,39 +39,39 @@ recognizer = cv2.face.LBPHFaceRecognizer_create()
 if os.path.exists('trainer/trainer.yml'):
     recognizer.read('trainer/trainer.yml')
 
-# Gunakan Dictionary {} bukan List [] agar lebih aman & cepat
-names = {} 
+# # Gunakan Dictionary {} bukan List [] agar lebih aman & cepat
+# names = {} 
 
-def load_user_names():
-    global names
-    names = {} # Reset memori dulu
+# def load_user_names():
+#     global names
+#     names = {} # Reset memori dulu
     
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
+#     try:
+#         conn = get_db_connection()
+#         cur = conn.cursor()
         
-        cur.execute("SELECT id, nama_lengkap FROM users")
-        rows = cur.fetchall()
+#         cur.execute("SELECT id, nama_lengkap FROM users")
+#         rows = cur.fetchall()
         
-        for row in rows:
-            user_id = row[0]
-            nama_user = row[1]
-            # Simpan ke memori: { 1: 'Admin', 2: 'Budi' }
-            names[user_id] = nama_user
+#         for row in rows:
+#             user_id = row[0]
+#             nama_user = row[1]
+#             # Simpan ke memori: { 1: 'Admin', 2: 'Budi' }
+#             names[user_id] = nama_user
         
-        # Tambahkan default untuk ID 0 (Unknown)
-        names[0] = "Unknown"
+#         # Tambahkan default untuk ID 0 (Unknown)
+#         names[0] = "Unknown"
         
-        conn.close()
-        print(f"[INFO] Berhasil memuat {len(names)} nama user dari Database.")
+#         conn.close()
+#         print(f"[INFO] Berhasil memuat {len(names)} nama user dari Database.")
         
-    except Exception as e:
-        print(f"[ERROR] Gagal memuat nama user: {e}")
-        # Jika database error, set default minimal agar tidak crash
-        names = {0: "Unknown", 1: "Admin"}
+#     except Exception as e:
+#         print(f"[ERROR] Gagal memuat nama user: {e}")
+#         # Jika database error, set default minimal agar tidak crash
+#         names = {0: "Unknown", 1: "Admin"}
 
-# PANGGIL FUNGSI INI SEKALI SAAT STARTUP
-load_user_names()
+# # PANGGIL FUNGSI INI SEKALI SAAT STARTUP
+# load_user_names()
 
 # Setup Kamera
 camera = cv2.VideoCapture(0)
@@ -658,6 +659,90 @@ def proses_absen():
     except Exception as e:
         print(f"[ERROR DB] Absensi gagal: {e}")
         return jsonify({'status': 'error', 'pesan': 'Terjadi kesalahan sistem database.'})
+    
+# capture via javascript WebRTC
+@app.route('/proses_absen_mobile', methods=['POST'])
+def proses_absen_mobile():
+    try:
+        data = request.get_json()
+        img_data = data['image'] # Foto Base64 dari HP
+        user_lat = float(data['latitude'])
+        user_long = float(data['longitude'])
+
+        # 1. Decode foto dari HP
+        img_bytes = base64.b64decode(img_data.split(',')[1])
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # 2. Deteksi wajah di foto
+        faces = face_detector.detectMultiScale(gray, 1.2, 5)
+        
+        if len(faces) == 0:
+            return jsonify({'status': 'error', 'pesan': 'Wajah tidak terdeteksi! Pastikan wajah terlihat jelas di HP.'})
+
+        # 3. Pengenalan Wajah
+        for (x, y, w, h) in faces:
+            id_wajah, confidence = recognizer.predict(gray[y:y+h, x:x+w])
+            
+            # --- VALIDASI ANTI-JOKI & CONFIDENCE ---
+            if confidence > 60:
+                return jsonify({'status': 'error', 'pesan': 'Wajah tidak dikenali!'})
+            
+            if session.get('user_id') != id_wajah:
+                return jsonify({'status': 'error', 'pesan': f'Bukan wajah {session["nama"]}!'})
+
+            # --- LOGIKA COPAS DARI PROSES_ABSEN LAMA DIMULAI ---
+            conn = get_db_connection()
+            cur = conn.cursor()
+
+            # Geofencing
+            cur.execute("SELECT latitude, longitude, radius_meter FROM lokasi_kantor WHERE id = 1")
+            kantor = cur.fetchone()
+            jarak = hitung_jarak(user_lat, user_long, float(kantor[0]), float(kantor[1]))
+            radius_max = int(kantor[2])
+            is_marketing = (session.get('divisi_id') == 2) 
+
+            if jarak > radius_max and not is_marketing:
+                cur.close()
+                conn.close()
+                return jsonify({'status': 'error', 'pesan': f'Gagal! Lokasi terlalu jauh. Jarak: {int(jarak)}m'})
+
+            # Cek data hari ini
+            cur.execute("SELECT id, jam_masuk, jam_pulang FROM absensi WHERE user_id = %s AND tanggal = CURRENT_DATE", (id_wajah,))
+            data_absen = cur.fetchone()
+            waktu_sekarang = datetime.now().strftime('%H:%M:%S')
+
+            if data_absen is None:
+                # Skenario A: Masuk
+                cur.execute("""
+                    INSERT INTO absensi (user_id, jam_masuk, lokasi_masuk, status_kehadiran)
+                    VALUES (%s, %s, %s, %s)
+                """, (id_wajah, waktu_sekarang, f"{user_lat},{user_long}", "Hadir"))
+                pesan = f"Absen MASUK via HP Berhasil! Semangat, {session['nama']}."
+            elif data_absen[2] is None:
+                # Skenario B: Pulang
+                cur.execute("""
+                    UPDATE absensi SET jam_pulang = %s, lokasi_pulang = %s WHERE id = %s
+                """, (waktu_sekarang, f"{user_lat},{user_long}", data_absen[0]))
+                pesan = f"Absen PULANG via HP Berhasil! Hati-hati di jalan."
+            else:
+                cur.close()
+                conn.close()
+                return jsonify({'status': 'error', 'pesan': 'Anda sudah selesai absen hari ini.'})
+
+            conn.commit()
+            cur.close()
+            conn.close()
+            # --- LOGIKA COPAS SELESAI ---
+
+            return jsonify({'status': 'success', 'pesan': pesan, 'jarak': f"{int(jarak)}m"})
+
+        return jsonify({'status': 'error', 'pesan': 'Gagal memproses wajah.'})
+
+    except Exception as e:
+        print(f"Error Mobile Absen: {e}")
+        return jsonify({'status': 'error', 'pesan': 'Terjadi kesalahan sistem.'})
     
 @app.route('/admin/laporan', methods=['GET', 'POST'])
 def laporan():
