@@ -74,7 +74,7 @@ if os.path.exists('trainer/trainer.yml'):
 # load_user_names()
 
 # Setup Kamera
-camera = cv2.VideoCapture(0)
+# camera = cv2.VideoCapture(0)
 
 # --- FUNGSI BANTUAN ---
 
@@ -306,8 +306,8 @@ def riwayat():
         years=years
     )
 
-@app.route('/izin', methods=['GET', 'POST'])
-def izin():
+# @app.route('/izin', methods=['GET', 'POST'])
+# def izin():
     if 'user_id' not in session: return redirect(url_for('index'))
     user_id = session['user_id']
 
@@ -341,8 +341,8 @@ def izin():
 
 # --- ROUTES ADMIN ---
 
-from flask import request
-from datetime import datetime
+# from flask import request
+# from datetime import datetime
 
 @app.route('/admin/dashboard', methods=['GET', 'POST'])
 def admin_dashboard():
@@ -478,24 +478,31 @@ def admin_dashboard():
 
 @app.route('/video_feed')
 def video_feed():
+    # [PROTEKSI] Cek apakah yang akses itu localhost atau dari luar (Cloudflared)
+    host = request.host
+    is_local = "localhost" in host or "127.0.0.1" in host
+
     def generate_frames():
         global global_frame, last_detected_id, last_detected_name
         
-        # Pastikan kamera terbuka
-        if not camera.isOpened():
-            camera.open(0)
+        # JANGAN buka kamera laptop kalau diakses dari luar (Cloudflared/HP lain)
+        if not is_local:
+            print(f"[INFO] Akses luar terdeteksi ({host}). Kamera laptop tetap mati.")
+            return
+
+        # Hanya jalankan ini kalau dibuka langsung di laptop server (localhost)
+        cap = cv2.VideoCapture(0) 
+
+        if not cap.isOpened():
+            print("[ERROR] Tidak dapat mengakses kamera laptop.")
+            return
 
         while True:
             try:
-                success, frame = camera.read()
-                
-                # --- PERBAIKAN UTAMA DISINI ---
+                success, frame = cap.read()
                 if not success:
-                    # Jika gagal baca, jangan break (mati). 
-                    # Tapi skip loop ini dan coba baca lagi frame berikutnya.
                     continue 
                 
-                # --- KODE BARU: Gunakan Lock saat memperbarui variabel global ---
                 with frame_lock:
                     global_frame = frame.copy()
 
@@ -511,56 +518,68 @@ def video_feed():
                 for (x, y, w, h) in faces:
                     cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
                     try:
-                        # Prediksi ID dan Confidence
-                        id, confidence = recognizer.predict(gray[y:y+h, x:x+w])
-                        
-                        # Ambang batas (Makin kecil makin ketat/mirip)
+                        id_pred, confidence = recognizer.predict(gray[y:y+h, x:x+w])
                         if confidence < 60: 
-                            last_detected_id = id
-                            
-                            # --- PERBAIKAN DISINI (Gunakan Dictionary .get) ---
-                            # Artinya: Cari 'id' di kamus 'names'. 
-                            # Jika tidak ketemu, kembalikan string "User {id}"
-                            last_detected_name = names.get(id, f"User {id}")
-                            # --------------------------------------------------
-                            
+                            with frame_lock:
+                                last_detected_id = id_pred
+                                last_detected_name = names.get(id_pred, f"User {id_pred}")
                         else:
-                            last_detected_id = 0
-                            last_detected_name = "Unknown"
+                            with frame_lock:
+                                last_detected_id = 0
+                                last_detected_name = "Unknown"
                         
-                        # Tampilkan Nama di Layar
-                        cv2.putText(frame, last_detected_name, (x+5, y-5), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                        cv2.putText(frame, last_detected_name, (x+5, y-5), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
                     except Exception as e:
                         pass
                 
-                # Encode ke format JPG untuk browser
                 ret, buffer = cv2.imencode('.jpg', frame)
-                frame_bytes = buffer.tobytes()
-                
                 yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
             
             except Exception as e:
-                print(f"Error Streaming: {e}")
-                pass
+                break
+
+        cap.release()
+        print("[INFO] Kamera laptop dimatikan.")
 
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/api/cek_jarak', methods=['POST'])
 def cek_jarak_realtime():
-    data = request.get_json()
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT latitude, longitude, radius_meter FROM lokasi_kantor WHERE id = 1")
-    kantor = cur.fetchone()
-    conn.close()
-    
-    jarak = hitung_jarak(data['latitude'], data['longitude'], float(kantor[0]), float(kantor[1]))
-    status_text = "Di Dalam Jangkauan" if jarak <= kantor[2] else "Di Luar Jangkauan"
-    status_class = "alert-success" if jarak <= kantor[2] else "alert-danger"
-    icon = "fa-circle-check" if jarak <= kantor[2] else "fa-circle-xmark"
-    
-    return jsonify({'jarak': int(jarak), 'status_text': status_text, 'status_class': status_class, 'icon': icon})
+    try:
+        data = request.get_json()
+        
+        # Validasi input biar gak error pas diproses
+        if not data or 'latitude' not in data or 'longitude' not in data:
+            return jsonify({'error': 'Data lokasi tidak lengkap'}), 400
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT latitude, longitude, radius_meter FROM lokasi_kantor WHERE id = 1")
+        kantor = cur.fetchone()
+        cur.close() # Tutup cursor biar rapi
+        conn.close()
+        
+        if not kantor:
+            return jsonify({'error': 'Data lokasi kantor belum diset'}), 404
+        
+        jarak = hitung_jarak(data['latitude'], data['longitude'], float(kantor[0]), float(kantor[1]))
+        
+        # Penentuan status (Logic lo tetap dipertahankan)
+        status_text = "Di Dalam Jangkauan" if jarak <= kantor[2] else "Di Luar Jangkauan"
+        status_class = "alert-success" if jarak <= kantor[2] else "alert-danger"
+        icon = "fa-circle-check" if jarak <= kantor[2] else "fa-circle-xmark"
+        
+        return jsonify({
+            'jarak': int(jarak), 
+            'status_text': status_text, 
+            'status_class': status_class, 
+            'icon': icon
+        })
+    except Exception as e:
+        print(f"[ERROR API] Cek Jarak Gagal: {e}")
+        return jsonify({'error': 'Gagal mengambil data lokasi'}), 500
 
 @app.route('/proses_absen', methods=['POST'])
 def proses_absen():
