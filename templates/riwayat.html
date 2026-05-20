@@ -35,6 +35,10 @@
                             <a href="{{ url_for('riwayat') }}" class="btn btn-light btn-sm border">
                                 <i class="fa-solid fa-arrows-rotate"></i>
                             </a>
+                            <a href="{{ url_for('export_riwayat_excel', bulan=bln, tahun=thn) }}"
+                                class="btn btn-success btn-sm px-3">
+                                <i class="fa-solid fa-file-excel me-1"></i> Export Excel
+                            </a>
                         </div>
                     </form>
                 </div>
@@ -50,6 +54,7 @@
                             <th class="ps-4 border-0">Tanggal</th>
                             <th class="border-0">Masuk</th>
                             <th class="border-0">Pulang</th>
+                            <th class="border-0">Durasi</th>
                             <th class="border-0">Status</th>
                             <th class="border-0">Lokasi</th>
                         </tr>
@@ -64,6 +69,17 @@
                                 </td>
                                 <td class="text-danger fw-bold">
                                     {% if row[2] %}{{ row[2].strftime('%H:%M') }}{% else %}--:--{% endif %}
+                                </td>
+                                <td class="text-primary fw-bold">
+                                    {% if row[5] %}
+                                        {% set secs = row[5].total_seconds() %}
+                                        {% set h = (secs // 3600) | int %}
+                                        {% set m = ((secs % 3600) // 60) | int %}
+
+                                        {{ h }} Jam {{ m }} Menit
+                                    {% else %}
+                                        0 Jam 0 Menit
+                                    {% endif %}
                                 </td>
                                 <td>
                                     {% if 'Hadir' in row[3] %}

@@ -93,19 +93,25 @@
                         <li class="list-group-item d-flex justify-content-between align-items-center py-3">
                             <div>
                                 <span class="fw-bold d-block text-dark">{{ log[0] }}</span>
-                                <small class="text-muted">{{ log[3] }} | <i class="fa-regular fa-calendar-days"></i> {{ log[4] }}</small>
+                                <small class="text-muted">
+                                    {{ log[4] }} | <i class="fa-regular fa-calendar-days"></i> {{ log[5].strftime('%d %b %Y') }}
+                                </small>
                             </div>
-                            
+
                             <div class="d-flex gap-3 text-center">
+
+                                <!-- MASUK -->
                                 <div>
                                     <small class="text-muted d-block mb-1 fw-semibold" style="font-size: 11px;">MASUK</small>
                                     <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
-                                        <i class="fa-solid fa-arrow-right-to-bracket me-1"></i> {{ log[1] }}
+                                        <i class="fa-solid fa-arrow-right-to-bracket me-1"></i> {{ log[1] if log[1] else '--:--' }}
                                     </span>
                                 </div>
+
+                                <!-- PULANG -->
                                 <div>
                                     <small class="text-muted d-block mb-1 fw-semibold" style="font-size: 11px;">PULANG</small>
-                                    {% if log[2] and log[2] != '-' and log[2] != None %}
+                                    {% if log[2] %}
                                         <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1">
                                             <i class="fa-solid fa-arrow-right-from-bracket me-1"></i> {{ log[2] }}
                                         </span>
@@ -115,6 +121,22 @@
                                         </span>
                                     {% endif %}
                                 </div>
+
+                                <!-- DURASI -->
+                                <div>
+                                    <small class="text-muted d-block mb-1 fw-semibold" style="font-size: 11px;">DURASI</small>
+                                    {% if log[3] %}
+                                        {% set secs = log[3].total_seconds() %}
+                                        {% set h = (secs // 3600) | int %}
+                                        {% set m = ((secs % 3600) // 60) | int %}
+                                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-2 py-1">
+                                            {{ "%02d:%02d"|format(h, m) }}
+                                        </span>
+                                    {% else %}
+                                        <span class="badge bg-light text-secondary border px-2 py-1">--:--</span>
+                                    {% endif %}
+                                </div>
+
                             </div>
                         </li>
                         {% endfor %}
@@ -125,6 +147,7 @@
                         </li>
                     {% endif %}
                 </ul>
+
             </div>
         </div>
     </div>

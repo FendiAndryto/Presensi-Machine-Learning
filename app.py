@@ -10,6 +10,9 @@ from PIL import Image
 from werkzeug.security import generate_password_hash, check_password_hash
 import threading
 import base64
+from flask import send_file, flash, get_flashed_messages
+from io import BytesIO
+import pandas as pd
 
 global_frame = None
 last_detected_id = 0 
@@ -38,43 +41,6 @@ recognizer = cv2.face.LBPHFaceRecognizer_create()
 # Cek apakah file otak AI ada? Kalau ada, muat.
 if os.path.exists('trainer/trainer.yml'):
     recognizer.read('trainer/trainer.yml')
-
-# # Gunakan Dictionary {} bukan List [] agar lebih aman & cepat
-# names = {} 
-
-# def load_user_names():
-#     global names
-#     names = {} # Reset memori dulu
-    
-#     try:
-#         conn = get_db_connection()
-#         cur = conn.cursor()
-        
-#         cur.execute("SELECT id, nama_lengkap FROM users")
-#         rows = cur.fetchall()
-        
-#         for row in rows:
-#             user_id = row[0]
-#             nama_user = row[1]
-#             # Simpan ke memori: { 1: 'Admin', 2: 'Budi' }
-#             names[user_id] = nama_user
-        
-#         # Tambahkan default untuk ID 0 (Unknown)
-#         names[0] = "Unknown"
-        
-#         conn.close()
-#         print(f"[INFO] Berhasil memuat {len(names)} nama user dari Database.")
-        
-#     except Exception as e:
-#         print(f"[ERROR] Gagal memuat nama user: {e}")
-#         # Jika database error, set default minimal agar tidak crash
-#         names = {0: "Unknown", 1: "Admin"}
-
-# # PANGGIL FUNGSI INI SEKALI SAAT STARTUP
-# load_user_names()
-
-# Setup Kamera
-# camera = cv2.VideoCapture(0)
 
 # --- FUNGSI BANTUAN ---
 
@@ -223,40 +189,55 @@ def dashboard():
         return redirect(url_for('index'))
 
     user_id = session['user_id']
-    
     conn = get_db_connection()
     cur = conn.cursor()
-    
-    # 2. Ambil Data Profil User (Nama & Divisi)
-    # Kita gunakan LEFT JOIN supaya kalau divisinya kosong, tidak error
-    cur.execute("""
-        SELECT users.nama_lengkap, divisi.nama_divisi 
-        FROM users 
-        LEFT JOIN divisi ON users.divisi_id = divisi.id 
-        WHERE users.id = %s
-    """, (user_id,))
-    
-    user_data = cur.fetchone()
-    
-    # Simpan ke variabel (Gunakan nilai default jika kosong)
-    nama_lengkap = user_data[0] if user_data else session['nama']
-    nama_divisi = user_data[1] if user_data and user_data[1] else "Staff Umum"
 
-    # 3. Ambil Data Absensi Hari Ini (Kode Lama)
-    cur.execute("SELECT jam_masuk, jam_pulang FROM absensi WHERE user_id = %s AND tanggal = CURRENT_DATE", (user_id,))
+    # 2. Profil User
+    cur.execute("""
+        SELECT u.nama_lengkap, d.nama_divisi
+        FROM users u
+        LEFT JOIN divisi d ON u.divisi_id = d.id
+        WHERE u.id = %s
+    """, (user_id,))
+    user_data = cur.fetchone()
+    nama_lengkap = user_data[0] if user_data else session.get('nama', '')
+    nama_divisi  = user_data[1] if user_data and user_data[1] else "Staff Umum"
+
+    # 3. Absensi hari ini (jam masuk, jam pulang, durasi_kerja)
+    cur.execute("""
+        SELECT jam_masuk,
+               jam_pulang,
+               durasi_kerja
+        FROM absensi
+        WHERE user_id = %s
+          AND tanggal = CURRENT_DATE
+    """, (user_id,))
     data = cur.fetchone()
-    
     conn.close()
-    
+
+    # 4. Format nilai untuk template
     jam_masuk = data[0].strftime("%H:%M") if data and data[0] else "--:--"
     jam_pulang = data[1].strftime("%H:%M") if data and data[1] else "--:--"
 
-    # 4. Kirim Data ke HTML (Perhatikan variabel baru: nama_lengkap & nama_divisi)
-    return render_template('dashboard.html', 
-                           jam_masuk=jam_masuk, 
-                           jam_pulang=jam_pulang,
-                           nama_lengkap=nama_lengkap,
-                           nama_divisi=nama_divisi)
+    # durasi_kerja sudah berupa interval (timedelta di psycopg2)
+    if data and data[2]:
+        total_seconds = data[2].total_seconds()
+        hours   = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        durasi_kerja = f"{hours:02d}:{minutes:02d}"
+    else:
+        durasi_kerja = "--:--"
+
+    # 5. Render template
+    return render_template(
+        'dashboard.html',
+        jam_masuk=jam_masuk,
+        jam_pulang=jam_pulang,
+        durasi_kerja=durasi_kerja,
+        nama_lengkap=nama_lengkap,
+        nama_divisi=nama_divisi
+    )
+
 
 @app.route('/riwayat')
 def riwayat():
@@ -282,7 +263,7 @@ def riwayat():
     # 3. Query PostgreSQL menggunakan EXTRACT
     # Kita memfilter data berdasarkan user_id, bulan, dan tahun
     query = """
-        SELECT tanggal, jam_masuk, jam_pulang, status_kehadiran, lokasi_masuk 
+        SELECT tanggal, jam_masuk, jam_pulang, status_kehadiran, lokasi_masuk, durasi_kerja 
         FROM absensi 
         WHERE user_id = %s 
         AND EXTRACT(MONTH FROM tanggal) = %s 
@@ -306,43 +287,102 @@ def riwayat():
         years=years
     )
 
-# @app.route('/izin', methods=['GET', 'POST'])
-# def izin():
-    if 'user_id' not in session: return redirect(url_for('index'))
-    user_id = session['user_id']
+@app.route('/riwayat/export')
+def export_riwayat_excel():
+    if 'user_id' not in session:
+        return redirect(url_for('index'))
+
+    from io import BytesIO
+    import pandas as pd
+    from flask import send_file
+    from datetime import datetime
+
+    now = datetime.now()
+
+    nama_bulan = {
+        1: "Januari", 2: "Februari", 3: "Maret", 4: "April",
+        5: "Mei", 6: "Juni", 7: "Juli", 8: "Agustus",
+        9: "September", 10: "Oktober", 11: "November", 12: "Desember"
+    }
+
+    bln = request.args.get('bulan', default=now.month, type=int)
+    thn = request.args.get('tahun', default=now.year, type=int)
 
     conn = get_db_connection()
     cur = conn.cursor()
 
-    if request.method == 'POST':
-        tgl_mulai = request.form['tgl_mulai']
-        tgl_selesai = request.form['tgl_selesai']
-        tipe = request.form['tipe_izin']
-        ket = request.form['keterangan']
-        file = request.files['bukti_foto']
-        
-        if file:
-            filename = secure_filename(file.filename)
-            nama_baru = f"izin_{user_id}_{filename}"
-            path_simpan = os.path.join('static/uploads', nama_baru)
-            file.save(path_simpan)
-            
-            cur.execute("""
-                INSERT INTO pengajuan_izin (user_id, tanggal_mulai, tanggal_selesai, tipe_izin, keterangan, bukti_foto)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (user_id, tgl_mulai, tgl_selesai, tipe, ket, nama_baru))
-            conn.commit()
-            flash('Pengajuan Berhasil!', 'success')
-            
-    cur.execute("SELECT tanggal_mulai, tanggal_selesai, tipe_izin, keterangan, status_approval FROM pengajuan_izin WHERE user_id = %s ORDER BY id DESC LIMIT 5", (user_id,))
-    riwayat = cur.fetchall()
+    query = """
+        SELECT tanggal, jam_masuk, jam_pulang, status_kehadiran, lokasi_masuk, durasi_kerja
+        FROM absensi
+        WHERE user_id = %s
+        AND EXTRACT(MONTH FROM tanggal) = %s
+        AND EXTRACT(YEAR FROM tanggal) = %s
+        ORDER BY tanggal DESC
+    """
+
+    cur.execute(query, (session['user_id'], bln, thn))
+    data = cur.fetchall()
+
+    laporan_data = []
+
+    for row in data:
+        tanggal = row[0].strftime('%d-%m-%Y')
+
+        jam_masuk = row[1].strftime('%H:%M') if row[1] else '--:--'
+        jam_pulang = row[2].strftime('%H:%M') if row[2] else '--:--'
+
+        status = row[3]
+        lokasi = row[4] if row[4] else '-'
+
+        # Format durasi kerja
+        if row[5]:
+            total_seconds = row[5].total_seconds()
+
+            jam = int(total_seconds // 3600)
+            menit = int((total_seconds % 3600) // 60)
+
+            durasi = f"{jam} Jam {menit} Menit"
+        else:
+            durasi = "--:--"
+
+        laporan_data.append({
+            'Tanggal': tanggal,
+            'Jam Masuk': jam_masuk,
+            'Jam Pulang': jam_pulang,
+            'Durasi Kerja': durasi,
+            'Status': status,
+            'Lokasi': lokasi
+        })
+
     conn.close()
-    return render_template('izin.html', riwayat=riwayat)
+
+    # ================= EXPORT EXCEL =================
+    df = pd.DataFrame(laporan_data)
+
+    output = BytesIO()
+
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Riwayat Absensi')
+
+        worksheet = writer.sheets['Riwayat Absensi']
+
+        # Auto width kolom
+        for column_cells in worksheet.columns:
+            length = max(len(str(cell.value)) if cell.value else 0 for cell in column_cells)
+            worksheet.column_dimensions[column_cells[0].column_letter].width = length + 5
+
+    output.seek(0)
+
+    filename = f"Riwayat_Absensi_{nama_bulan[bln]}_{thn}.xlsx"
+
+    return send_file(
+        output,
+        download_name=filename,
+        as_attachment=True,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
 
 # --- ROUTES ADMIN ---
-
-# from flask import request
-# from datetime import datetime
 
 @app.route('/admin/dashboard', methods=['GET', 'POST'])
 def admin_dashboard():
@@ -353,47 +393,45 @@ def admin_dashboard():
     conn = get_db_connection()
     cur = conn.cursor()
 
-    # Inisialisasi variabel filter
+    # ---------- Filter ----------
     tanggal = request.form.get('tanggal')
-    bln = request.form.get('bulan')
-    thn = request.form.get('tahun')
+    bln     = request.form.get('bulan')
+    thn     = request.form.get('tahun')
 
     where_clause = ""
     params = []
 
-    # Logika Filter
     if tanggal:
         where_clause = "DATE(a.tanggal) = %s"
         params.append(tanggal)
     elif bln and thn:
-        where_clause = "MONTH(a.tanggal) = %s AND YEAR(a.tanggal) = %s"
+        where_clause = "EXTRACT(MONTH FROM a.tanggal) = %s AND EXTRACT(YEAR FROM a.tanggal) = %s"
         params.extend([bln, thn])
     elif thn:
-        where_clause = "YEAR(a.tanggal) = %s"
+        where_clause = "EXTRACT(YEAR FROM a.tanggal) = %s"
         params.append(thn)
     else:
-        # Default: Hari ini
         today = datetime.today().strftime('%Y-%m-%d')
         where_clause = "DATE(a.tanggal) = %s"
         params.append(today)
 
-    # Statistik Karyawan
+    # ---------- Statistik ----------
     cur.execute("SELECT COUNT(*) FROM users WHERE role = 'Staff'")
     total_user = cur.fetchone()[0]
 
-    # Hitung Hadir berdasarkan filter
-    query_hadir = f"SELECT COUNT(*) FROM absensi a WHERE {where_clause} AND status_kehadiran = 'Hadir'"
-    cur.execute(query_hadir, params)
+    cur.execute(f"SELECT COUNT(*) FROM absensi a WHERE {where_clause} AND status_kehadiran = 'Hadir'", params)
     hadir = cur.fetchone()[0]
 
-    stats = {
-        'total_user': total_user,
-        'hadir': hadir
-    }
+    stats = {'total_user': total_user, 'hadir': hadir}
 
-    # List Absensi berdasarkan filter
+    # ---------- Data absensi (tambahkan durasi_kerja) ----------
     query_absen = f"""
-        SELECT u.nama_lengkap, a.jam_masuk, a.jam_pulang, d.nama_divisi, a.tanggal
+        SELECT u.nama_lengkap,
+               a.jam_masuk,
+               a.jam_pulang,
+               a.durasi_kerja,          -- ← baru
+               d.nama_divisi,
+               a.tanggal
         FROM absensi a
         JOIN users u ON a.user_id = u.id
         LEFT JOIN divisi d ON u.divisi_id = d.id
@@ -401,7 +439,7 @@ def admin_dashboard():
         ORDER BY a.tanggal DESC, a.jam_masuk DESC
     """
     cur.execute(query_absen, params)
-    live_absen = cur.fetchall()
+    live_absen = cur.fetchall()          # setiap baris = (nama, masuk, pulang, durasi, divisi, tanggal)
 
     conn.close()
 
@@ -411,7 +449,7 @@ def admin_dashboard():
         9: "September", 10: "Oktober", 11: "November", 12: "Desember"
     }
 
-    tgl_input = datetime.today().strftime('%Y-%m-%d')
+    tgl_input   = datetime.today().strftime('%Y-%m-%d')
     tgl_sekarang = datetime.now().strftime('%d %B %Y')
 
     return render_template(
@@ -426,55 +464,6 @@ def admin_dashboard():
         tgl_input=tgl_input
     )
 
-# # --- ROUTE AKSI ADMIN (APPROVE / REJECT) ---
-
-# @app.route('/admin/approve/<int:id>')
-# def approve_izin(id):
-#     # Proteksi Admin
-#     if 'user_id' not in session or session['role'] != 'Admin':
-#         return redirect(url_for('index'))
-
-#     conn = get_db_connection()
-#     cur = conn.cursor()
-    
-#     # Update Status jadi Disetujui
-#     try:
-#         cur.execute("UPDATE pengajuan_izin SET status_approval = 'Disetujui' WHERE id = %s", (id,))
-#         conn.commit()
-#         flash('Pengajuan Izin berhasil DISETUJUI.', 'success')
-#     except Exception as e:
-#         print(e)
-#         flash('Gagal update database.', 'danger')
-        
-#     cur.close()
-#     conn.close()
-    
-#     return redirect(url_for('admin_dashboard'))
-
-# @app.route('/admin/reject/<int:id>')
-# def reject_izin(id):
-#     # Proteksi Admin
-#     if 'user_id' not in session or session['role'] != 'Admin':
-#         return redirect(url_for('index'))
-
-#     conn = get_db_connection()
-#     cur = conn.cursor()
-    
-#     # Update Status jadi Ditolak
-#     try:
-#         cur.execute("UPDATE pengajuan_izin SET status_approval = 'Ditolak' WHERE id = %s", (id,))
-#         conn.commit()
-#         flash('Pengajuan Izin telah DITOLAK.', 'warning')
-#     except Exception as e:
-#         print(e)
-#         flash('Gagal update database.', 'danger')
-        
-#     cur.close()
-#     conn.close()
-    
-#     return redirect(url_for('admin_dashboard'))
-
-# --- API & SYSTEM ROUTES ---
 
 @app.route('/video_feed')
 def video_feed():
@@ -585,187 +574,192 @@ def cek_jarak_realtime():
 def proses_absen():
     global last_detected_id, last_detected_name
     
-    # --- KODE BARU: Kunci sebentar saat membaca data dari memori ---
-    # Ini mencegah bentrok jika ada 2 orang absen bersamaan
     with frame_lock:
-        current_id = last_detected_id
+        current_id   = last_detected_id
         current_name = last_detected_name
     
-    # --- VALIDASI 1: APAKAH ADA WAJAH? ---
     if current_id == 0:
-        return jsonify({'status': 'error', 'pesan': 'Wajah tidak dikenali! Harap posisikan wajah dengan benar.'})
+        return jsonify({'status': 'error',
+                        'pesan': 'Wajah tidak dikenali! Harap posisikan wajah dengan benar.'})
+    
+    if 'user_id' not in session:
+        return jsonify({'status': 'error',
+                        'pesan': 'Sesi habis. Silakan login ulang.'})
+    if session['user_id'] != current_id:
+        return jsonify({'status': 'error',
+                        'pesan': f'Wajah tidak cocok! Anda login sebagai {session["nama"]}, '
+                                 f'tapi terdeteksi wajah {current_name}.'})
 
-    # --- VALIDASI 2: ANTI-JOKI (PENTING!) ---
-    # Cek apakah ID Wajah (AI) sama dengan ID Akun yang Login (Session)
-    if 'user_id' in session:
-        if session['user_id'] != current_id:
-            return jsonify({
-                'status': 'error', 
-                'pesan': f'Wajah tidak cocok! Anda login sebagai {session["nama"]}, tapi terdeteksi wajah {current_name}.'
-            })
-    else:
-        return jsonify({'status': 'error', 'pesan': 'Sesi habis. Silakan login ulang.'})
-
-    # --- AMBIL DATA LOKASI ---
     data = request.get_json()
-    user_lat = float(data['latitude'])
+    user_lat  = float(data['latitude'])
     user_long = float(data['longitude'])
 
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
+        cur  = conn.cursor()
 
-        # --- VALIDASI 3: GEOFENCING ---
+        # ---- GEO‑FENCING -------------------------------------------------
         cur.execute("SELECT latitude, longitude, radius_meter FROM lokasi_kantor WHERE id = 1")
         kantor = cur.fetchone()
-        
-        jarak = hitung_jarak(user_lat, user_long, float(kantor[0]), float(kantor[1]))
+        jarak = hitung_jarak(user_lat, user_long,
+                             float(kantor[0]), float(kantor[1]))
         radius_max = int(kantor[2])
-        
-        # Logika Pengecualian Marketing (Opsional)
-        is_marketing = (session.get('divisi_id') == 2) 
+        is_marketing = (session.get('divisi_id') == 2)
 
         if jarak > radius_max and not is_marketing:
-            cur.close()
-            conn.close()
-            return jsonify({'status': 'error', 'pesan': f'Gagal! Lokasi terlalu jauh. Jarak: {int(jarak)}m (Max: {radius_max}m)'})
+            cur.close(); conn.close()
+            return jsonify({'status': 'error',
+                            'pesan': f'Gagal! Lokasi terlalu jauh. Jarak: {int(jarak)}m (Max: {radius_max}m)'})
 
-        # --- LOGIKA INTI (SKENARIO A, B, C) ---
-        
-        # Cek data hari ini menggunakan current_id
+        # ---- CEK ABSENSI HARI INI ---------------------------------------
         cur.execute("""
-            SELECT id, jam_masuk, jam_pulang FROM absensi 
+            SELECT id, jam_masuk, jam_pulang
+            FROM absensi
             WHERE user_id = %s AND tanggal = CURRENT_DATE
         """, (current_id,))
-        
         data_absen = cur.fetchone()
         waktu_sekarang = datetime.now().strftime('%H:%M:%S')
 
-        # SKENARIO A: BELUM ABSEN -> MASUK
+        # -------- A: BELUM ABSEN (MASUK) ---------------------------------
         if data_absen is None:
             cur.execute("""
                 INSERT INTO absensi (user_id, jam_masuk, lokasi_masuk, status_kehadiran)
                 VALUES (%s, %s, %s, %s)
-            """, (current_id, waktu_sekarang, f"{user_lat},{user_long}", "Hadir"))
+            """, (current_id, waktu_sekarang,
+                  f"{user_lat},{user_long}", "Hadir"))
             conn.commit()
             pesan = f"Absen MASUK Berhasil! Semangat, {session['nama']}."
 
-        # SKENARIO B: SUDAH MASUK, BELUM PULANG -> PULANG
+        # -------- B: SUDAH MASUK, BELUM PULANG (PULANG) ------------------
         elif data_absen[2] is None:
             cur.execute("""
-                UPDATE absensi 
-                SET jam_pulang = %s, lokasi_pulang = %s 
+                UPDATE absensi
+                SET jam_pulang = %s,
+                    lokasi_pulang = %s
                 WHERE id = %s
-            """, (waktu_sekarang, f"{user_lat},{user_long}", data_absen[0]))
+            """, (waktu_sekarang,
+                  f"{user_lat},{user_long}",
+                  data_absen[0]))
             conn.commit()
+            # durasi_kerja ter‑generate otomatis oleh DB
             pesan = f"Absen PULANG Berhasil! Hati-hati di jalan, {session['nama']}."
 
-        # SKENARIO C: SUDAH LENGKAP -> TOLAK
+        # -------- C: SUDAH LENGKAP ---------------------------------------
         else:
-            cur.close()
-            conn.close()
-            return jsonify({'status': 'error', 'pesan': 'Anda sudah selesai absen hari ini.'})
+            cur.close(); conn.close()
+            return jsonify({'status': 'error',
+                            'pesan': 'Anda sudah selesai absen hari ini.'})
 
-        cur.close()
-        conn.close()
-        
-        return jsonify({
-            'status': 'success', 
-            'pesan': pesan,
-            'jarak': f"{int(jarak)} Meter"
-        })
+        cur.close(); conn.close()
+        return jsonify({'status': 'success',
+                        'pesan': pesan,
+                        'jarak': f"{int(jarak)} Meter"})
 
     except Exception as e:
         print(f"[ERROR DB] Absensi gagal: {e}")
-        return jsonify({'status': 'error', 'pesan': 'Terjadi kesalahan sistem database.'})
+        return jsonify({'status': 'error',
+                        'pesan': 'Terjadi kesalahan sistem database.'})
+
     
 # capture via javascript WebRTC
 @app.route('/proses_absen_mobile', methods=['POST'])
 def proses_absen_mobile():
     try:
         data = request.get_json()
-        img_data = data['image'] # Foto Base64 dari HP
-        user_lat = float(data['latitude'])
-        user_long = float(data['longitude'])
+        img_data   = data['image']               # base64
+        user_lat   = float(data['latitude'])
+        user_long  = float(data['longitude'])
 
-        # 1. Decode foto dari HP
+        # ---- Decode foto -------------------------------------------------
         img_bytes = base64.b64decode(img_data.split(',')[1])
-        nparr = np.frombuffer(img_bytes, np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        nparr     = np.frombuffer(img_bytes, np.uint8)
+        frame     = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        gray      = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # 2. Deteksi wajah di foto
+        # ---- Deteksi wajah -----------------------------------------------
         faces = face_detector.detectMultiScale(gray, 1.2, 5)
-        
         if len(faces) == 0:
-            return jsonify({'status': 'error', 'pesan': 'Wajah tidak terdeteksi! Pastikan wajah terlihat jelas di HP.'})
+            return jsonify({'status': 'error',
+                            'pesan': 'Wajah tidak terdeteksi! Pastikan wajah terlihat jelas di HP.'})
 
-        # 3. Pengenalan Wajah
         for (x, y, w, h) in faces:
             id_wajah, confidence = recognizer.predict(gray[y:y+h, x:x+w])
-            
-            # --- VALIDASI ANTI-JOKI & CONFIDENCE ---
             if confidence > 60:
-                return jsonify({'status': 'error', 'pesan': 'Wajah tidak dikenali!'})
-            
+                return jsonify({'status': 'error',
+                                'pesan': 'Wajah tidak dikenali!'})
             if session.get('user_id') != id_wajah:
-                return jsonify({'status': 'error', 'pesan': f'Bukan wajah {session["nama"]}!'})
+                return jsonify({'status': 'error',
+                                'pesan': f'Bukan wajah {session["nama"]}!'})
 
-            # --- LOGIKA COPAS DARI PROSES_ABSEN LAMA DIMULAI ---
+            # ---- Logika yang sama dengan /proses_absen ------------------
             conn = get_db_connection()
-            cur = conn.cursor()
+            cur  = conn.cursor()
 
-            # Geofencing
+            # Geo‑fencing
             cur.execute("SELECT latitude, longitude, radius_meter FROM lokasi_kantor WHERE id = 1")
             kantor = cur.fetchone()
-            jarak = hitung_jarak(user_lat, user_long, float(kantor[0]), float(kantor[1]))
+            jarak = hitung_jarak(user_lat, user_long,
+                                 float(kantor[0]), float(kantor[1]))
             radius_max = int(kantor[2])
-            is_marketing = (session.get('divisi_id') == 2) 
+            is_marketing = (session.get('divisi_id') == 2)
 
             if jarak > radius_max and not is_marketing:
-                cur.close()
-                conn.close()
-                return jsonify({'status': 'error', 'pesan': f'Gagal! Lokasi terlalu jauh. Jarak: {int(jarak)}m'})
+                cur.close(); conn.close()
+                return jsonify({'status': 'error',
+                                'pesan': f'Gagal! Lokasi terlalu jauh. Jarak: {int(jarak)}m'})
 
             # Cek data hari ini
-            cur.execute("SELECT id, jam_masuk, jam_pulang FROM absensi WHERE user_id = %s AND tanggal = CURRENT_DATE", (id_wajah,))
+            cur.execute("""
+                SELECT id, jam_masuk, jam_pulang
+                FROM absensi
+                WHERE user_id = %s AND tanggal = CURRENT_DATE
+            """, (id_wajah,))
             data_absen = cur.fetchone()
             waktu_sekarang = datetime.now().strftime('%H:%M:%S')
 
+            # ---- A: Masuk -------------------------------------------------
             if data_absen is None:
-                # Skenario A: Masuk
                 cur.execute("""
                     INSERT INTO absensi (user_id, jam_masuk, lokasi_masuk, status_kehadiran)
                     VALUES (%s, %s, %s, %s)
-                """, (id_wajah, waktu_sekarang, f"{user_lat},{user_long}", "Hadir"))
+                """, (id_wajah, waktu_sekarang,
+                      f"{user_lat},{user_long}", "Hadir"))
                 pesan = f"Absen MASUK via HP Berhasil! Semangat, {session['nama']}."
+            # ---- B: Pulang ------------------------------------------------
             elif data_absen[2] is None:
-                # Skenario B: Pulang
                 cur.execute("""
-                    UPDATE absensi SET jam_pulang = %s, lokasi_pulang = %s WHERE id = %s
-                """, (waktu_sekarang, f"{user_lat},{user_long}", data_absen[0]))
+                    UPDATE absensi
+                    SET jam_pulang = %s,
+                        lokasi_pulang = %s
+                    WHERE id = %s
+                """, (waktu_sekarang,
+                      f"{user_lat},{user_long}",
+                      data_absen[0]))
                 pesan = f"Absen PULANG via HP Berhasil! Hati-hati di jalan."
+                # durasi_kerja dihitung otomatis oleh DB
+            # ---- C: Sudah selesai -----------------------------------------
             else:
-                cur.close()
-                conn.close()
-                return jsonify({'status': 'error', 'pesan': 'Anda sudah selesai absen hari ini.'})
+                cur.close(); conn.close()
+                return jsonify({'status': 'error',
+                                'pesan': 'Anda sudah selesai absen hari ini.'})
 
             conn.commit()
-            cur.close()
-            conn.close()
-            # --- LOGIKA COPAS SELESAI ---
-
-            return jsonify({'status': 'success', 'pesan': pesan, 'jarak': f"{int(jarak)}m"})
+            cur.close(); conn.close()
+            return jsonify({'status': 'success',
+                            'pesan': pesan,
+                            'jarak': f"{int(jarak)}m"})
 
         return jsonify({'status': 'error', 'pesan': 'Gagal memproses wajah.'})
 
     except Exception as e:
         print(f"Error Mobile Absen: {e}")
-        return jsonify({'status': 'error', 'pesan': 'Terjadi kesalahan sistem.'})
+        return jsonify({'status': 'error',
+                        'pesan': 'Terjadi kesalahan sistem.'})
+
     
 @app.route('/admin/laporan', methods=['GET', 'POST'])
 def laporan():
-    if 'user_id' not in session or session['role'] != 'Admin':
+    if 'user_id' not in session or session.get('role') != 'Admin':
         return redirect(url_for('index'))
 
     now = datetime.now()
@@ -775,72 +769,218 @@ def laporan():
         9: "September", 10: "Oktober", 11: "November", 12: "Desember"
     }
 
-    # Ambil periode: Cek POST dulu, kalau tidak ada cek GET, kalau tidak ada pake NOW
+    # --------- ambil bulan & tahun ----------
     if request.method == 'POST':
         selected_month = int(request.form.get('bulan', now.month))
-        selected_year = int(request.form.get('tahun', now.year))
+        selected_year  = int(request.form.get('tahun', now.year))
     else:
         selected_month = request.args.get('bulan', default=now.month, type=int)
-        selected_year = request.args.get('tahun', default=now.year, type=int)
+        selected_year  = request.args.get('tahun', default=now.year, type=int)
 
     conn = get_db_connection()
-    cur = conn.cursor()
+    cur  = conn.cursor()
 
-    # Query User Staff
+    # --------- daftar staff ----------
     cur.execute("""
-        SELECT u.id, u.nama_lengkap, d.nama_divisi 
-        FROM users u 
-        LEFT JOIN divisi d ON u.divisi_id = d.id 
+        SELECT u.id, u.nama_lengkap, d.nama_divisi
+        FROM users u
+        LEFT JOIN divisi d ON u.divisi_id = d.id
         WHERE u.role = 'Staff'
         ORDER BY u.nama_lengkap ASC
     """)
     users = cur.fetchall()
-    
+
     laporan_data = []
 
     for user in users:
         user_id, nama, divisi = user
         divisi = divisi if divisi else "-"
-        
-        # Hitung HADIR
+
+        # ----- hadir -----
         cur.execute("""
-            SELECT COUNT(*) FROM absensi 
-            WHERE user_id = %s 
-            AND EXTRACT(MONTH FROM tanggal) = %s 
-            AND EXTRACT(YEAR FROM tanggal) = %s
-            AND status_kehadiran = 'Hadir'
+            SELECT COUNT(*)
+            FROM absensi
+            WHERE user_id = %s
+              AND EXTRACT(MONTH FROM tanggal) = %s
+              AND EXTRACT(YEAR FROM tanggal) = %s
+              AND status_kehadiran = 'Hadir'
         """, (user_id, selected_month, selected_year))
         hadir = cur.fetchone()[0]
 
-        # Hitung TERLAMBAT
+        # ----- terlambat -----
         cur.execute("""
-            SELECT COUNT(*) FROM absensi 
-            WHERE user_id = %s 
-            AND EXTRACT(MONTH FROM tanggal) = %s 
-            AND EXTRACT(YEAR FROM tanggal) = %s
-            AND jam_masuk > '08:00:00'
+            SELECT COUNT(*)
+            FROM absensi
+            WHERE user_id = %s
+              AND EXTRACT(MONTH FROM tanggal) = %s
+              AND EXTRACT(YEAR FROM tanggal) = %s
+              AND jam_masuk > '08:00:00'
         """, (user_id, selected_month, selected_year))
         telat = cur.fetchone()[0]
 
+        # ----- total jam kerja (interval) -----
+        cur.execute("""
+            SELECT SUM(durasi_kerja) AS total_interval
+            FROM absensi
+            WHERE user_id = %s
+              AND EXTRACT(MONTH FROM tanggal) = %s
+              AND EXTRACT(YEAR FROM tanggal) = %s
+              AND status_kehadiran = 'Hadir'
+        """, (user_id, selected_month, selected_year))
+        total_interval = cur.fetchone()[0]   # None bila tidak ada data
+
+        if total_interval:
+            # total_interval adalah datetime.timedelta
+            total_seconds = total_interval.total_seconds()
+            jam   = int(total_seconds // 3600)                # jam penuh
+            menit = int((total_seconds % 3600) // 60)         # sisa menit
+            jam_kerja_hm = f"{jam} jam {menit} menit"
+            jam_kerja_decimal = round(total_seconds / 3600, 2)   # untuk Excel bila diperlukan
+        else:
+            jam_kerja_hm = "0 jam 0 menit"
+            jam_kerja_decimal = 0.0
+
         laporan_data.append({
-            'nama': nama,
-            'divisi': divisi,
-            'hadir': hadir,
-            'telat': telat
+            'nama'            : nama,
+            'divisi'          : divisi,
+            'hadir'           : hadir,
+            'telat'           : telat,
+            'jam_kerja_hm'    : jam_kerja_hm,      # <-- dipakai di HTML
+            'jam_kerja_dec'   : jam_kerja_decimal # <-- dipakai di export Excel
         })
 
     conn.close()
 
-    # Daftar tahun untuk filter (3 tahun terakhir)
     years = range(now.year, now.year - 3, -1)
 
-    return render_template('laporan.html', 
-                           data_laporan=laporan_data, 
-                           bln=selected_month, 
-                           thn=selected_year,
-                           nama_bulan=nama_bulan,
-                           years=years,
-                           tgl_cetak=now.strftime("%d %B %Y"))
+    return render_template(
+        'laporan.html',
+        data_laporan=laporan_data,
+        bln=selected_month,
+        thn=selected_year,
+        nama_bulan=nama_bulan,
+        years=years,
+        tgl_cetak=now.strftime("%d %B %Y")
+    )
+
+@app.route('/admin/laporan/export')
+def export_laporan_excel():
+    if 'user_id' not in session or session.get('role') != 'Admin':
+        return redirect(url_for('index'))
+
+    now = datetime.now()
+
+    selected_month = request.args.get('bulan', default=now.month, type=int)
+    selected_year  = request.args.get('tahun', default=now.year, type=int)
+
+    nama_bulan = {
+        1: "Januari", 2: "Februari", 3: "Maret", 4: "April",
+        5: "Mei", 6: "Juni", 7: "Juli", 8: "Agustus",
+        9: "September", 10: "Oktober", 11: "November", 12: "Desember"
+    }
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # Ambil data staff
+    cur.execute("""
+        SELECT u.id, u.nama_lengkap, d.nama_divisi
+        FROM users u
+        LEFT JOIN divisi d ON u.divisi_id = d.id
+        WHERE u.role = 'Staff'
+        ORDER BY u.nama_lengkap ASC
+    """)
+
+    users = cur.fetchall()
+
+    laporan_data = []
+
+    for user in users:
+        user_id, nama, divisi = user
+        divisi = divisi if divisi else "-"
+
+        # ================= HADIR =================
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM absensi
+            WHERE user_id = %s
+              AND EXTRACT(MONTH FROM tanggal) = %s
+              AND EXTRACT(YEAR FROM tanggal) = %s
+              AND status_kehadiran = 'Hadir'
+        """, (user_id, selected_month, selected_year))
+
+        hadir = cur.fetchone()[0]
+
+        # ================= TERLAMBAT =================
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM absensi
+            WHERE user_id = %s
+              AND EXTRACT(MONTH FROM tanggal) = %s
+              AND EXTRACT(YEAR FROM tanggal) = %s
+              AND jam_masuk > '08:00:00'
+        """, (user_id, selected_month, selected_year))
+
+        telat = cur.fetchone()[0]
+
+        # ================= TOTAL JAM KERJA =================
+        cur.execute("""
+            SELECT SUM(durasi_kerja)
+            FROM absensi
+            WHERE user_id = %s
+              AND EXTRACT(MONTH FROM tanggal) = %s
+              AND EXTRACT(YEAR FROM tanggal) = %s
+              AND status_kehadiran = 'Hadir'
+        """, (user_id, selected_month, selected_year))
+
+        total_interval = cur.fetchone()[0]
+
+        if total_interval:
+            total_seconds = total_interval.total_seconds()
+
+            jam = int(total_seconds // 3600)
+            menit = int((total_seconds % 3600) // 60)
+
+            jam_kerja = f"{jam} Jam {menit} Menit"
+        else:
+            jam_kerja = "0 Jam 0 Menit"
+
+        laporan_data.append({
+            'Nama Karyawan': nama,
+            'Divisi': divisi,
+            'Total Hadir': f"{hadir} Hari",
+            'Terlambat': f"{telat} Kali",
+            'Total Jam Kerja': jam_kerja
+        })
+
+    conn.close()
+
+    # ================= DATAFRAME =================
+    df = pd.DataFrame(laporan_data)
+
+    # ================= EXPORT EXCEL =================
+    output = BytesIO()
+
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Laporan Absensi')
+
+        worksheet = writer.sheets['Laporan Absensi']
+
+        # Auto width column
+        for column_cells in worksheet.columns:
+            length = max(len(str(cell.value)) if cell.value else 0 for cell in column_cells)
+            worksheet.column_dimensions[column_cells[0].column_letter].width = length + 5
+
+    output.seek(0)
+
+    filename = f"Laporan_Absensi_{nama_bulan[selected_month]}_{selected_year}.xlsx"
+
+    return send_file(
+        output,
+        download_name=filename,
+        as_attachment=True,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
 
 # --- MANAJEMEN USER (CRUD) ---
 

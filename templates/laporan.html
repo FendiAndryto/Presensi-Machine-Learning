@@ -2,8 +2,8 @@
 
 {% block content %}
 <div class="container mt-4">
-    
-    <!-- Filter Card (Sembunyi saat Print) -->
+
+    <!-- ==================== Filter (tidak dicetak) ==================== -->
     <div class="card shadow-sm mb-4 d-print-none border-0">
         <div class="card-body py-3">
             <form action="{{ url_for('laporan') }}" method="POST" class="row g-3 align-items-center">
@@ -30,6 +30,10 @@
                     </button>
                 </div>
                 <div class="col-auto ms-auto">
+                    <a href="{{ url_for('export_laporan_excel', bulan=bln, tahun=thn) }}"
+                        class="btn btn-success btn-sm px-3">
+                        <i class="fa-solid fa-file-excel me-1"></i> Export Excel
+                    </a>
                     <button type="button" onclick="window.print()" class="btn btn-success btn-sm px-3">
                         <i class="fa-solid fa-print me-1"></i> Cetak PDF
                     </button>
@@ -38,14 +42,14 @@
         </div>
     </div>
 
-    <!-- Header Laporan (Hanya muncul saat Print) -->
+    <!-- ==================== Header (hanya saat print) ==================== -->
     <div class="d-none d-print-block text-center mb-4">
         <h3 class="fw-bold">LAPORAN ABSENSI KARYAWAN</h3>
         <h5>Periode: {{ nama_bulan[bln] }} {{ thn }}</h5>
         <hr>
     </div>
 
-    <!-- Tabel Data -->
+    <!-- ==================== Tabel Data ==================== -->
     <div class="card shadow-sm border-0">
         <div class="card-body p-0">
             <div class="table-responsive">
@@ -55,8 +59,9 @@
                             <th width="5%">No</th>
                             <th>Nama Karyawan</th>
                             <th>Divisi</th>
-                            <th width="15%">Total Hadir</th>
-                            <th width="15%">Terlambat</th>
+                            <th width="12%">Total Hadir</th>
+                            <th width="12%">Terlambat</th>
+                            <th width="15%">Total Jam Kerja</th>   <!-- kolom baru -->
                         </tr>
                     </thead>
                     <tbody>
@@ -68,11 +73,12 @@
                                 <td class="text-center">{{ row['divisi'] }}</td>
                                 <td class="text-center text-success fw-bold">{{ row['hadir'] }} Hari</td>
                                 <td class="text-center text-danger fw-bold">{{ row['telat'] }} Kali</td>
+                                <td class="text-center">{{ row['jam_kerja_hm'] }}</td>   <!-- nilai total jam -->
                             </tr>
                             {% endfor %}
                         {% else %}
                             <tr>
-                                <td colspan="5" class="text-center py-5 text-muted">
+                                <td colspan="6" class="text-center py-5 text-muted">
                                     <i class="fa-solid fa-folder-open fs-2 d-block mb-2 opacity-25"></i>
                                     Data tidak ditemukan untuk periode {{ nama_bulan[bln] }} {{ thn }}.
                                 </td>
@@ -83,8 +89,8 @@
             </div>
         </div>
     </div>
-    
-    <!-- Tanda Tangan (Hanya muncul saat Print) -->
+
+    <!-- ==================== Tanda Tangan (hanya saat print) ==================== -->
     <div class="d-none d-print-block mt-5">
         <div class="row">
             <div class="col-4 offset-8 text-center">
