@@ -8,19 +8,20 @@
         <div class="card-body py-3">
             <form action="{{ url_for('laporan') }}" method="POST" class="row g-3 align-items-center">
                 <div class="col-auto">
-                    <h5 class="m-0 fw-bold text-primary"><i class="fa-solid fa-file-invoice me-2"></i>Laporan Periode:</h5>
+                    <h5 class="m-0 fw-bold text-primary"><i class="fa-solid fa-file-invoice me-2"></i>Laporan Periode:
+                    </h5>
                 </div>
                 <div class="col-auto">
                     <select name="bulan" class="form-select form-select-sm shadow-none">
                         {% for num, nama in nama_bulan.items() %}
-                            <option value="{{ num }}" {% if bln == num %}selected{% endif %}>{{ nama }}</option>
+                        <option value="{{ num }}" {% if bln==num %}selected{% endif %}>{{ nama }}</option>
                         {% endfor %}
                     </select>
                 </div>
                 <div class="col-auto">
                     <select name="tahun" class="form-select form-select-sm shadow-none">
                         {% for y in years %}
-                            <option value="{{ y }}" {% if thn == y %}selected{% endif %}>{{ y }}</option>
+                        <option value="{{ y }}" {% if thn==y %}selected{% endif %}>{{ y }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -43,10 +44,33 @@
     </div>
 
     <!-- ==================== Header (hanya saat print) ==================== -->
-    <div class="d-none d-print-block text-center mb-4">
-        <h3 class="fw-bold">LAPORAN ABSENSI KARYAWAN</h3>
-        <h5>Periode: {{ nama_bulan[bln] }} {{ thn }}</h5>
-        <hr>
+    <div class="d-none d-print-block">
+        <div class="d-flex align-items-center mb-4 pb-3" style="border-bottom: 4px double #1e3a8a;">
+            <div class="pe-4">
+                <img src="{{ url_for('static', filename='LogoGlobal.png') }}" alt="Logo Global Institut"
+                    style="height: 85px; width: auto; object-fit: contain;">
+            </div>
+            <div class="flex-grow-1 text-center">
+                <h2 class="fw-bold m-0"
+                    style="color: #0f172a; font-size: 20pt; font-family: 'Georgia', serif; letter-spacing: 0.5px;">
+                    GLOBAL INSTITUT</h2>
+                <h5 class="fw-semibold m-0 text-secondary" style="font-size: 11pt; letter-spacing: 0.5px;">INSTITUT
+                    TEKNOLOGI & BISNIS GLOBAL</h5>
+                <p class="m-0 mt-1 text-muted" style="font-size: 8.5pt;">
+                    Jl. Aria Santika No. 43A Margasari, Karawaci, Tangerang, Banten • Telp: (021) 555-0199 • Email:
+                    info@global.ac.id • Web: www.global.ac.id
+                </p>
+            </div>
+            <!-- Balancing container to guarantee exact horizontal center alignment of the text -->
+            <div class="ps-4" style="width: 117px; height: 1px; visibility: hidden;"></div>
+        </div>
+
+        <div class="report-title text-center my-4">
+            <h4 class="fw-bold text-uppercase m-0" style="color: #1e293b; letter-spacing: 1px;">LAPORAN BULANAN ABSENSI
+                KARYAWAN</h4>
+            <p class="m-0 mt-2 text-muted fw-semibold">Periode Kehadiran: <span class="text-dark">{{ nama_bulan[bln] }}
+                    {{ thn }}</span></p>
+        </div>
     </div>
 
     <!-- ==================== Tabel Data ==================== -->
@@ -59,30 +83,30 @@
                             <th width="5%">No</th>
                             <th>Nama Karyawan</th>
                             <th>Divisi</th>
-                            <th width="12%">Total Hadir</th>
-                            <th width="12%">Terlambat</th>
-                            <th width="15%">Total Jam Kerja</th>   <!-- kolom baru -->
+                            <th width="15%">Total Hadir</th>
+                            <th width="15%">Terlambat</th>
+                            <th width="20%">Total Jam Kerja</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% if data_laporan %}
-                            {% for row in data_laporan %}
-                            <tr>
-                                <td class="text-center">{{ loop.index }}</td>
-                                <td class="fw-bold ps-3">{{ row['nama'] }}</td>
-                                <td class="text-center">{{ row['divisi'] }}</td>
-                                <td class="text-center text-success fw-bold">{{ row['hadir'] }} Hari</td>
-                                <td class="text-center text-danger fw-bold">{{ row['telat'] }} Kali</td>
-                                <td class="text-center">{{ row['jam_kerja_hm'] }}</td>   <!-- nilai total jam -->
-                            </tr>
-                            {% endfor %}
+                        {% for row in data_laporan %}
+                        <tr>
+                            <td class="text-center">{{ loop.index }}</td>
+                            <td class="fw-bold ps-3">{{ row['nama'] }}</td>
+                            <td class="text-center">{{ row['divisi'] }}</td>
+                            <td class="text-center text-success fw-bold">{{ row['hadir'] }} Hari</td>
+                            <td class="text-center text-danger fw-bold">{{ row['telat'] }} Kali</td>
+                            <td class="text-center fw-semibold text-secondary">{{ row['jam_kerja_hm'] }}</td>
+                        </tr>
+                        {% endfor %}
                         {% else %}
-                            <tr>
-                                <td colspan="6" class="text-center py-5 text-muted">
-                                    <i class="fa-solid fa-folder-open fs-2 d-block mb-2 opacity-25"></i>
-                                    Data tidak ditemukan untuk periode {{ nama_bulan[bln] }} {{ thn }}.
-                                </td>
-                            </tr>
+                        <tr>
+                            <td colspan="6" class="text-center py-5 text-muted">
+                                <i class="fa-solid fa-folder-open fs-2 d-block mb-2 opacity-25"></i>
+                                Data tidak ditemukan untuk periode {{ nama_bulan[bln] }} {{ thn }}.
+                            </td>
+                        </tr>
                         {% endif %}
                     </tbody>
                 </table>
@@ -91,12 +115,16 @@
     </div>
 
     <!-- ==================== Tanda Tangan (hanya saat print) ==================== -->
-    <div class="d-none d-print-block mt-5">
-        <div class="row">
-            <div class="col-4 offset-8 text-center">
-                <p>Jakarta, {{ tgl_cetak }}</p>
-                <div style="height: 80px;"></div>
-                <p class="fw-bold border-bottom d-inline-block pb-1">Admin HRD</p>
+    <div class="d-none d-print-block signature-section mt-5">
+        <div class="d-flex justify-content-end">
+            <div class="text-center" style="width: 250px;">
+                <p class="mb-1">Tangerang, {{ tgl_cetak }}</p>
+                <p class="fw-semibold mb-0">Mengetahui,</p>
+                <p class="text-muted mb-4" style="font-size: 9pt;">Admin HRD</p>
+                <div style="height: 65px;"></div>
+                <p class="fw-bold border-bottom d-inline-block px-3 pb-1 mb-0"
+                    style="border-bottom: 2px solid #0f172a !important;">HRD Administrator</p>
+                <p class="text-muted mt-1" style="font-size: 8pt; letter-spacing: 0.5px;">Administrator</p>
             </div>
         </div>
     </div>
@@ -105,11 +133,84 @@
 
 <style>
     @media print {
-        .d-print-none { display: none !important; }
-        .d-print-block { display: block !important; }
-        body { background-color: white !important; font-size: 12pt; }
-        .card { border: 1px solid #dee2e6 !important; box-shadow: none !important; }
-        .table thead th { background-color: #f8f9fa !important; -webkit-print-color-adjust: exact; }
+        .d-print-none {
+            display: none !important;
+        }
+
+        .d-print-block {
+            display: block !important;
+        }
+
+        body {
+            background-color: white !important;
+            color: #0f172a !important;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+            font-size: 11pt !important;
+            line-height: 1.4 !important;
+        }
+
+        @page {
+            size: A4 portrait;
+            margin: 20mm 15mm 20mm 15mm;
+        }
+
+        .card {
+            border: none !important;
+            box-shadow: none !important;
+        }
+
+        .card-body {
+            padding: 0 !important;
+        }
+
+        .table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+            margin-bottom: 1rem !important;
+            color: #0f172a !important;
+        }
+
+        .table th,
+        .table td {
+            border: 1px solid #cbd5e1 !important;
+            padding: 10px 12px !important;
+            font-size: 10pt !important;
+        }
+
+        .table thead th {
+            background-color: #1e3a8a !important;
+            color: #ffffff !important;
+            font-weight: bold !important;
+            text-transform: uppercase !important;
+            font-size: 9pt !important;
+            letter-spacing: 0.5px !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+            text-align: center !important;
+        }
+
+        .table tbody tr:nth-child(even) {
+            background-color: #f8fafc !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+
+        .text-success {
+            color: #15803d !important;
+            /* Darker green for high contrast print */
+            font-weight: 600 !important;
+        }
+
+        .text-danger {
+            color: #b91c1c !important;
+            /* Darker red for high contrast print */
+            font-weight: 600 !important;
+        }
+
+        .signature-section {
+            margin-top: 50px !important;
+            page-break-inside: avoid;
+        }
     }
 </style>
 {% endblock %}

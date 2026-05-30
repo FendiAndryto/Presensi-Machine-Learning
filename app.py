@@ -292,11 +292,6 @@ def export_riwayat_excel():
     if 'user_id' not in session:
         return redirect(url_for('index'))
 
-    from io import BytesIO
-    import pandas as pd
-    from flask import send_file
-    from datetime import datetime
-
     now = datetime.now()
 
     nama_bulan = {
