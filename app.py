@@ -341,6 +341,7 @@ def export_riwayat_excel():
             durasi = "--:--"
 
         laporan_data.append({
+            'No': len(laporan_data) + 1,
             'Tanggal': tanggal,
             'Jam Masuk': jam_masuk,
             'Jam Pulang': jam_pulang,
@@ -348,6 +349,17 @@ def export_riwayat_excel():
             'Status': status,
             'Lokasi': lokasi
         })
+
+    # Ambil info user untuk Header
+    cur.execute("""
+        SELECT u.nama_lengkap, d.nama_divisi
+        FROM users u
+        LEFT JOIN divisi d ON u.divisi_id = d.id
+        WHERE u.id = %s
+    """, (session['user_id'],))
+    user_info = cur.fetchone()
+    nama_lengkap = user_info[0] if user_info else session.get('nama', 'Karyawan')
+    divisi = user_info[1] if user_info and user_info[1] else "-"
 
     conn.close()
 
@@ -357,14 +369,85 @@ def export_riwayat_excel():
     output = BytesIO()
 
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Riwayat Absensi')
+        df.to_excel(writer, index=False, sheet_name='Riwayat Absensi', startrow=4)
 
         worksheet = writer.sheets['Riwayat Absensi']
 
-        # Auto width kolom
-        for column_cells in worksheet.columns:
-            length = max(len(str(cell.value)) if cell.value else 0 for cell in column_cells)
-            worksheet.column_dimensions[column_cells[0].column_letter].width = length + 5
+        # Import openpyxl styles locally
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+        # 1. Judul Laporan (Row 1-3)
+        worksheet.merge_cells('A1:G1')
+        worksheet['A1'] = "LAPORAN RIWAYAT ABSENSI KARYAWAN"
+        worksheet['A1'].font = Font(name='Segoe UI', size=14, bold=True, color='0F172A')
+        worksheet['A1'].alignment = Alignment(horizontal='center', vertical='center')
+
+        worksheet.merge_cells('A2:G2')
+        worksheet['A2'] = "Institut Teknologi dan Bisnis Bina Sarana Global"
+        worksheet['A2'].font = Font(name='Segoe UI', size=10.5, bold=True, color='1E3A8A')
+        worksheet['A2'].alignment = Alignment(horizontal='center', vertical='center')
+
+        worksheet.merge_cells('A3:G3')
+        worksheet['A3'] = f"Nama: {nama_lengkap}  |  Divisi: {divisi}  |  Periode: {nama_bulan[bln]} {thn}"
+        worksheet['A3'].font = Font(name='Segoe UI', size=9.5, italic=True, color='475569')
+        worksheet['A3'].alignment = Alignment(horizontal='center', vertical='center')
+
+        # Row Heights
+        worksheet.row_dimensions[1].height = 25
+        worksheet.row_dimensions[2].height = 20
+        worksheet.row_dimensions[3].height = 20
+        worksheet.row_dimensions[4].height = 15  # Spacer
+        worksheet.row_dimensions[5].height = 26  # Header Table
+
+        # Table Header Styling (Row 5)
+        header_fill = PatternFill(start_color='1E3A8A', end_color='1E3A8A', fill_type='solid')
+        header_font = Font(name='Segoe UI', size=11, bold=True, color='FFFFFF')
+        header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+        thin_side = Side(border_style="thin", color="CBD5E1")
+        border_all = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+        for col_idx in range(1, 8):
+            cell = worksheet.cell(row=5, column=col_idx)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+            cell.border = border_all
+
+        # Table Data Styling (Row 6 onwards)
+        zebra_fill = PatternFill(start_color='F8FAFC', end_color='F8FAFC', fill_type='solid')
+        white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
+        data_font = Font(name='Segoe UI', size=10, color='0F172A')
+
+        for row in range(6, 6 + len(df)):
+            worksheet.row_dimensions[row].height = 20
+            current_fill = zebra_fill if row % 2 == 1 else white_fill
+            
+            for col in range(1, 8):
+                cell = worksheet.cell(row=row, column=col)
+                cell.fill = current_fill
+                cell.font = data_font
+                cell.border = border_all
+                
+                # Custom alignment
+                if col in [1, 2, 3, 4, 5, 6]:
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+                else:  # Lokasi
+                    cell.alignment = Alignment(horizontal='left', vertical='center')
+
+        # Column widths
+        column_widths = {
+            'A': 8,   # No
+            'B': 15,  # Tanggal
+            'C': 15,  # Jam Masuk
+            'D': 15,  # Jam Pulang
+            'E': 20,  # Durasi Kerja
+            'F': 15,  # Status
+            'G': 32   # Lokasi
+        }
+
+        for col_letter, width in column_widths.items():
+            worksheet.column_dimensions[col_letter].width = width
 
     output.seek(0)
 
@@ -941,6 +1024,7 @@ def export_laporan_excel():
             jam_kerja = "0 Jam 0 Menit"
 
         laporan_data.append({
+            'No': len(laporan_data) + 1,
             'Nama Karyawan': nama,
             'Divisi': divisi,
             'Total Hadir': f"{hadir} Hari",
@@ -957,14 +1041,86 @@ def export_laporan_excel():
     output = BytesIO()
 
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Laporan Absensi')
+        df.to_excel(writer, index=False, sheet_name='Laporan Absensi', startrow=4)
 
         worksheet = writer.sheets['Laporan Absensi']
 
-        # Auto width column
-        for column_cells in worksheet.columns:
-            length = max(len(str(cell.value)) if cell.value else 0 for cell in column_cells)
-            worksheet.column_dimensions[column_cells[0].column_letter].width = length + 5
+        # Import openpyxl styles locally
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+        # 1. Judul Laporan (Row 1-3)
+        worksheet.merge_cells('A1:F1')
+        worksheet['A1'] = "LAPORAN ABSENSI BULANAN KARYAWAN"
+        worksheet['A1'].font = Font(name='Segoe UI', size=14, bold=True, color='0F172A')
+        worksheet['A1'].alignment = Alignment(horizontal='center', vertical='center')
+
+        worksheet.merge_cells('A2:F2')
+        worksheet['A2'] = "Institut Teknologi dan Bisnis Bina Sarana Global"
+        worksheet['A2'].font = Font(name='Segoe UI', size=10.5, bold=True, color='1E3A8A')
+        worksheet['A2'].alignment = Alignment(horizontal='center', vertical='center')
+
+        worksheet.merge_cells('A3:F3')
+        worksheet['A3'] = f"Periode Kehadiran: {nama_bulan[selected_month]} {selected_year}"
+        worksheet['A3'].font = Font(name='Segoe UI', size=9.5, italic=True, color='475569')
+        worksheet['A3'].alignment = Alignment(horizontal='center', vertical='center')
+
+        # Row Heights
+        worksheet.row_dimensions[1].height = 25
+        worksheet.row_dimensions[2].height = 20
+        worksheet.row_dimensions[3].height = 20
+        worksheet.row_dimensions[4].height = 15  # Spacer
+        worksheet.row_dimensions[5].height = 26  # Header Table
+
+        # Table Header Styling (Row 5)
+        header_fill = PatternFill(start_color='1E3A8A', end_color='1E3A8A', fill_type='solid')
+        header_font = Font(name='Segoe UI', size=11, bold=True, color='FFFFFF')
+        header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+        thin_side = Side(border_style="thin", color="CBD5E1")
+        border_all = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+        for col_idx in range(1, 7):
+            cell = worksheet.cell(row=5, column=col_idx)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+            cell.border = border_all
+
+        # Table Data Styling (Row 6 onwards)
+        zebra_fill = PatternFill(start_color='F8FAFC', end_color='F8FAFC', fill_type='solid')
+        white_fill = PatternFill(start_color='FFFFFF', end_color='FFFFFF', fill_type='solid')
+        data_font = Font(name='Segoe UI', size=10, color='0F172A')
+
+        for row in range(6, 6 + len(df)):
+            worksheet.row_dimensions[row].height = 20
+            current_fill = zebra_fill if row % 2 == 1 else white_fill
+            
+            for col in range(1, 7):
+                cell = worksheet.cell(row=row, column=col)
+                cell.fill = current_fill
+                cell.font = data_font
+                cell.border = border_all
+                
+                # Custom alignment
+                if col == 1:
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+                elif col == 2:
+                    cell.alignment = Alignment(horizontal='left', vertical='center')
+                else:
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+
+        # Column widths
+        column_widths = {
+            'A': 8,   # No
+            'B': 28,  # Nama Karyawan
+            'C': 18,  # Divisi
+            'D': 18,  # Total Hadir
+            'E': 18,  # Terlambat
+            'F': 22   # Total Jam Kerja
+        }
+
+        for col_letter, width in column_widths.items():
+            worksheet.column_dimensions[col_letter].width = width
 
     output.seek(0)
 

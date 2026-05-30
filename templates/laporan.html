@@ -45,31 +45,20 @@
 
     <!-- ==================== Header (hanya saat print) ==================== -->
     <div class="d-none d-print-block">
-        <div class="d-flex align-items-center mb-4 pb-3" style="border-bottom: 4px double #1e3a8a;">
-            <div class="pe-4">
-                <img src="{{ url_for('static', filename='LogoGlobal.png') }}" alt="Logo Global Institut"
-                    style="height: 85px; width: auto; object-fit: contain;">
-            </div>
-            <div class="flex-grow-1 text-center">
-                <h2 class="fw-bold m-0"
-                    style="color: #0f172a; font-size: 20pt; font-family: 'Georgia', serif; letter-spacing: 0.5px;">
-                    GLOBAL INSTITUT</h2>
-                <h5 class="fw-semibold m-0 text-secondary" style="font-size: 11pt; letter-spacing: 0.5px;">INSTITUT
-                    TEKNOLOGI & BISNIS GLOBAL</h5>
-                <p class="m-0 mt-1 text-muted" style="font-size: 8.5pt;">
-                    Jl. Aria Santika No. 43A Margasari, Karawaci, Tangerang, Banten • Telp: (021) 555-0199 • Email:
-                    info@global.ac.id • Web: www.global.ac.id
+        <div class="d-flex align-items-center justify-content-center my-4">
+            <img src="{{ url_for('static', filename='LogoGlobal.png') }}" alt="Logo"
+                style="height: 80px; width: auto; object-fit: contain;" class="me-4">
+            <div class="text-start">
+                <h4 class="fw-bold text-uppercase m-0" style="color: #0f172a; letter-spacing: 1.5px; line-height: 1.2; font-size: 15pt;">
+                    Laporan Bulanan Absensi Karyawan
+                </h4>
+                <h5 class="fw-bold text-uppercase mt-1 mb-0" style="color: #1e3a8a; letter-spacing: 1.5px; font-size: 10pt;">
+                    Institut Teknologi dan Bisnis Bina Sarana Global
+                </h5>
+                <p class="m-0 mt-2 text-muted fw-semibold" style="font-size: 9.5pt; letter-spacing: 0.5px;">
+                    Periode Kehadiran: <span class="text-dark fw-bold">{{ nama_bulan[bln] }} {{ thn }}</span>
                 </p>
             </div>
-            <!-- Balancing container to guarantee exact horizontal center alignment of the text -->
-            <div class="ps-4" style="width: 117px; height: 1px; visibility: hidden;"></div>
-        </div>
-
-        <div class="report-title text-center my-4">
-            <h4 class="fw-bold text-uppercase m-0" style="color: #1e293b; letter-spacing: 1px;">LAPORAN BULANAN ABSENSI
-                KARYAWAN</h4>
-            <p class="m-0 mt-2 text-muted fw-semibold">Periode Kehadiran: <span class="text-dark">{{ nama_bulan[bln] }}
-                    {{ thn }}</span></p>
         </div>
     </div>
 
@@ -151,7 +140,14 @@
 
         @page {
             size: A4 portrait;
-            margin: 20mm 15mm 20mm 15mm;
+            margin: 10mm;
+        }
+
+        .container {
+            width: 100% !important;
+            max-width: 100% !important;
+            padding: 0 !important;
+            margin: 0 !important;
         }
 
         .card {
