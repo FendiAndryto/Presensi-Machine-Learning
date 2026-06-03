@@ -112,7 +112,7 @@ pip install flask opencv-python opencv-contrib-python psycopg2 numpy pillow pand
    ```python
    DB_NAME = "skripsi_db"
    DB_USER = "postgres"
-   DB_PASS = "12345"       # Sesuaikan dengan password PostgreSQL Anda
+   DB_PASS = ""
    DB_HOST = "localhost"
    ```
 3. Jalankan script inisialisasi tabel & data seeder:
