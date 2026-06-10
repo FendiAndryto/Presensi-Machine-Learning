@@ -1236,5 +1236,9 @@ def add_header(response):
     return response
 
 if __name__ == '__main__':
-    # Tambahkan threaded=True agar streaming tidak terganggu saat tombol ditekan
-    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
+    app.run(
+        host='127.0.0.1',
+        port=8000,
+        debug=True,
+        threaded=True
+    )
