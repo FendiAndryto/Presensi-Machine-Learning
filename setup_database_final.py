@@ -63,7 +63,7 @@ def create_tables():
             lokasi_masuk VARCHAR(100),
             lokasi_pulang VARCHAR(100),
             status_kehadiran VARCHAR(20),
-            durasi_kerja VARCHAR(20),
+            durasi_kerja INTERVAL,
             FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
         """
@@ -74,11 +74,12 @@ def create_tables():
         conn = psycopg2.connect(database=DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST, port=DB_PORT)
         cur = conn.cursor()
         
-        print("[INFO] Menghapus tabel lama (KECUALI lokasi_kantor) agar bersih...")
+        print("[INFO] Menghapus tabel lama agar bersih...")
         # Urutan drop penting karena Foreign Key!
         cur.execute("DROP TABLE IF EXISTS absensi")
         cur.execute("DROP TABLE IF EXISTS users")
         cur.execute("DROP TABLE IF EXISTS divisi")
+        cur.execute("DROP TABLE IF EXISTS lokasi_kantor")
         # NOTE: DROP TABLE lokasi_kantor KITA HAPUS agar koordinat aman.
 
         print("[INFO] Membuat struktur tabel baru...")
@@ -91,9 +92,11 @@ def create_tables():
         # 1. Isi Divisi
         cur.execute("INSERT INTO divisi (nama_divisi) VALUES ('IT'), ('Marketing'), ('Keuangan'), ('HRD')")
         
-        # 2. Isi Lokasi Kantor (Dihapus/Dicoment)
-        # Kita tidak melakukan INSERT lagi agar data koordinat yang sudah ada di database tidak double/tertimpa.
-        # Jika tabelnya ternyata kosong, kamu bisa input manual di DBeaver/pgAdmin.
+        # 2. Isi Lokasi Kantor
+        cur.execute("""
+            INSERT INTO lokasi_kantor (id, nama_lokasi, latitude, longitude, radius_meter)
+            VALUES (1, 'Kantor Pusat', -6.179389, 106.607972, 50)
+        """)
 
         # --- GENERATE PASSWORD SECARA AMAN ---
         # Password '123' diubah menjadi format acak (Hash) agar bisa login di web
