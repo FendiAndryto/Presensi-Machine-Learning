@@ -27,9 +27,7 @@ Sistem ini juga dilengkapi dengan mekanisme **Geo-fencing** yang membatasi jarak
 * Mengukur jarak koordinat geografis *real-time* user dengan titik koordinat pusat kantor menggunakan rumus **Haversine**.
 * **Kebijakan Fleksibel per Divisi**: Karyawan divisi *IT*, *Keuangan*, dan *HRD* wajib berada di dalam jangkauan radius kantor (misalnya 50 meter) untuk melakukan presensi, sedangkan divisi *Marketing* memiliki dispensasi khusus untuk melakukan absensi dari luar jangkauan radius kantor.
 
-### 4. 📄 Pengajuan & Persetujuan Izin (Leave Management)
-* Staff dapat mengajukan izin sakit/cuti langsung dari portal mereka dengan mengunggah foto bukti fisik.
-* Admin dapat meninjau, menyetujui, atau menolak pengajuan tersebut secara instan melalui panel Admin.
+
 
 ### 5. 📊 Dasbor Admin & Laporan Interaktif
 * Statistik kehadiran harian visual dan langsung.
@@ -119,7 +117,7 @@ pip install flask opencv-python opencv-contrib-python psycopg2 numpy pillow pand
    ```bash
    python setup_database_final.py
    ```
-   *Script ini otomatis akan membuat struktur tabel `divisi`, `users`, `lokasi_kantor`, `absensi`, dan `pengajuan_izin`, serta menambahkan data akun bawaan untuk pengujian.*
+   *Script ini otomatis akan membuat struktur tabel `divisi`, `users`, `lokasi_kantor`, dan `absensi`, serta menambahkan data akun bawaan untuk pengujian.*
 
 ### 6. Jalankan Aplikasi
 Jalankan server aplikasi Flask:

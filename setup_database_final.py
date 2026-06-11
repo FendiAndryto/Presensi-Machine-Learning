@@ -1,12 +1,18 @@
 import psycopg2
 from psycopg2 import sql
 from werkzeug.security import generate_password_hash # TAMBAHAN: Import untuk keamanan password
+import os
+from dotenv import load_dotenv
+
+# Load env variables from .env if present
+load_dotenv()
 
 # --- KONFIGURASI DATABASE ---
-DB_NAME = "skripsi_db"
-DB_USER = "postgres"
-DB_PASS = "12345"       
-DB_HOST = "localhost"
+DB_NAME = os.environ.get("DB_NAME", "skripsi_db")
+DB_USER = os.environ.get("DB_USER", "postgres")
+DB_PASS = os.environ.get("DB_PASS", "12345")       
+DB_HOST = os.environ.get("DB_HOST", "localhost")
+DB_PORT = os.environ.get("DB_PORT", "5432")
 
 def create_tables():
     commands = (
@@ -60,32 +66,16 @@ def create_tables():
             durasi_kerja VARCHAR(20),
             FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
-        """,
-
-        # 5. Tabel PENGAJUAN IZIN
-        """
-        CREATE TABLE IF NOT EXISTS pengajuan_izin (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            tanggal_mulai DATE NOT NULL,
-            tanggal_selesai DATE NOT NULL,
-            tipe_izin VARCHAR(20),
-            keterangan TEXT,
-            bukti_foto VARCHAR(255),
-            status_approval VARCHAR(20) DEFAULT 'Pending',
-            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-        )
         """
     )
 
     conn = None
     try:
-        conn = psycopg2.connect(database=DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST)
+        conn = psycopg2.connect(database=DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST, port=DB_PORT)
         cur = conn.cursor()
         
         print("[INFO] Menghapus tabel lama (KECUALI lokasi_kantor) agar bersih...")
         # Urutan drop penting karena Foreign Key!
-        cur.execute("DROP TABLE IF EXISTS pengajuan_izin")
         cur.execute("DROP TABLE IF EXISTS absensi")
         cur.execute("DROP TABLE IF EXISTS users")
         cur.execute("DROP TABLE IF EXISTS divisi")

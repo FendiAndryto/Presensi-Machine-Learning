@@ -19,18 +19,44 @@ last_detected_id = 0
 last_detected_name = "Unknown"
 frame_lock = threading.Lock() # <-- TAMBAHKAN INI
 
+from dotenv import load_dotenv
+load_dotenv()
+
 app = Flask(__name__)
-app.secret_key = 'rahasia_skripsi_pendi' # Kunci untuk Session & Flash
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "rahasia_skripsi_pendi")
+
 
 # --- KONFIGURASI DATABASE ---
-DB_NAME = "skripsi_db"
-DB_USER = "postgres"
-DB_PASS = "12345"  
-DB_HOST = "localhost"
+DB_NAME = os.environ.get("DB_NAME", "skripsi_db")
+DB_USER = os.environ.get("DB_USER", "postgres")
+DB_PASS = os.environ.get("DB_PASS", "12345")  
+DB_HOST = os.environ.get("DB_HOST", "localhost")
+DB_PORT = os.environ.get("DB_PORT", "5432")
 
 # --- DATABASE CONNECTION ---
 def get_db_connection():
-    return psycopg2.connect(database=DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST)
+    return psycopg2.connect(database=DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST, port=DB_PORT)
+
+user_names_cache = {}
+def get_name_by_id(user_id):
+    global user_names_cache
+    if not user_id:
+        return "Unknown"
+    if user_id in user_names_cache:
+        return user_names_cache[user_id]
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT nama_lengkap FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row:
+            user_names_cache[user_id] = row[0]
+            return row[0]
+    except Exception as e:
+        print(f"[ERROR] Gagal load nama untuk ID {user_id}: {e}")
+    return f"User {user_id}"
 
 # --- SETUP COMPUTER VISION (YANG SUDAH DIPERBAIKI) ---
 
@@ -589,7 +615,7 @@ def video_feed():
                         if confidence < 60: 
                             with frame_lock:
                                 last_detected_id = id_pred
-                                last_detected_name = names.get(id_pred, f"User {id_pred}")
+                                last_detected_name = get_name_by_id(id_pred)
                         else:
                             with frame_lock:
                                 last_detected_id = 0
@@ -1221,10 +1247,18 @@ def hapus_user(id):
     conn.commit()
     conn.close()
     
-    # Hapus juga dataset wajahnya (Opsional tapi bagus untuk kebersihan)
-    # Anda bisa tambahkan logic hapus file User.ID.*.jpg disini nanti
+    # Hapus juga dataset wajahnya (agar bersih dan hemat disk)
+    import glob
+    try:
+        dataset_files = glob.glob(os.path.join('dataset', f"User.{id}.*.jpg"))
+        for f in dataset_files:
+            if os.path.exists(f):
+                os.remove(f)
+        print(f"[INFO] Dataset untuk User ID {id} berhasil dibersihkan.")
+    except Exception as e:
+        print(f"[WARNING] Gagal membersihkan dataset wajah User ID {id}: {e}")
     
-    flash('User berhasil dihapus.', 'warning')
+    flash('User berhasil dihapus beserta data wajahnya.', 'warning')
     return redirect(url_for('kelola_users'))
     
     # --- TAMBAHAN KEAMANAN: NO CACHE ---
