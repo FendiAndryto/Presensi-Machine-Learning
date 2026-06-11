@@ -7,6 +7,8 @@ services:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASS}
+      TZ: Asia/Jakarta
+      PGTZ: Asia/Jakarta
     ports:
       - "5432:5432"
     volumes:
@@ -20,6 +22,8 @@ services:
       - db
     ports:
       - "8000:8000"
+    environment:
+      - TZ=Asia/Jakarta
     env_file:
       - .env # <-- Ini kunci rahasianya, biar otomatis ngebaca file .env server
     volumes:
