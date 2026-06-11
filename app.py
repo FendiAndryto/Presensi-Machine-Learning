@@ -1198,7 +1198,28 @@ def kelola_users():
     divisi_list = cur.fetchall()
     
     conn.close()
-    return render_template('kelola_users.html', users=users, divisi_list=divisi_list)
+
+    # Cek user mana saja yang sudah memiliki dataset foto wajah
+    has_dataset = set()
+    if os.path.exists('dataset'):
+        for filename in os.listdir('dataset'):
+            if filename.startswith("User.") and filename.endswith(".jpg"):
+                parts = filename.split('.')
+                if len(parts) >= 3:
+                    try:
+                        u_id = int(parts[1])
+                        has_dataset.add(u_id)
+                    except ValueError:
+                        pass
+
+    users_with_status = []
+    for u in users:
+        # Tuple: (id, nama_lengkap, username, role, nama_divisi, has_dataset)
+        users_with_status.append(
+            (u[0], u[1], u[2], u[3], u[4], u[0] in has_dataset)
+        )
+    
+    return render_template('kelola_users.html', users=users_with_status, divisi_list=divisi_list)
 
 @app.route('/admin/edit_user/<int:id>', methods=['POST'])
 def edit_user(id):

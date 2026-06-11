@@ -82,9 +82,15 @@
                                         <small class="text-muted">{{ u[4] }}</small>
                                     </td>
                                     <td>
+                                        {% if u[5] %}
+                                        <button class="btn btn-secondary btn-sm" disabled title="Dataset wajah sudah direkam">
+                                            <i class="fa-solid fa-circle-check me-1"></i> Terpola
+                                        </button>
+                                        {% else %}
                                         <a href="/admin/ambil_dataset/{{ u[0] }}" class="btn btn-outline-primary btn-sm">
                                             <i class="fa-solid fa-camera me-1"></i> Ambil Foto
                                         </a>
+                                        {% endif %}
                                     </td>
                                     <td class="text-center">
                                         <!-- Tombol Pemicu Modal Edit -->
