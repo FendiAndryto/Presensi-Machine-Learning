@@ -8,8 +8,9 @@
             <h4 class="fw-bold mb-3">Pengambilan Dataset: {{ nama_user }}</h4>
             
             <div class="card shadow-lg mb-4 bg-dark">
-                <div class="card-body p-1">
-                    <img src="{{ url_for('video_feed') }}" class="img-fluid rounded border border-2 border-secondary" width="100%">
+                <div class="card-body p-1" style="position: relative; overflow: hidden; min-height: 350px;">
+                    <video id="webcam" style="width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1);" autoplay playsinline></video>
+                    <canvas id="canvas" style="display: none;"></canvas>
                 </div>
             </div>
 
@@ -38,24 +39,29 @@
 </div>
 
 <script>
-    // --- UPDATE SCRIPT YANG LEBIH STABIL ---
-    
-    // Pakai tanda kutip agar aman
     let userId = parseInt("{{ user_id }}");
-    
-    let totalFoto = 0; // Urutan file (akan direset kalau sesi baru, atau lanjut terserah logika)
-    // Kita buat logic agar totalFoto melanjutkan file yang ada di folder nanti
-    // Tapi untuk simpelnya di sesi web, kita hitung global 1-80
-    
-    let countSesi = 0; // Target 20 per sesi
+    let totalFoto = 0;
+    let countSesi = 0;
 
-    // Daftar Instruksi
     const sesiList = [
-        { id: 1, text: "Sesi 1: WAJAH DATAR", btnNext: "MULAI" },
-        { id: 2, text: "Sesi 2: WAJAH SENYUM", btnNext: "MULAI" },
-        { id: 3, text: "Sesi 3: WAJAH SERONG KIRI", btnNext: "MULAI" },
+        { id: 1, text: "Sesi 1: WAJAH DATAR", btnNext: "MULAI SESI 2" },
+        { id: 2, text: "Sesi 2: WAJAH SENYUM", btnNext: "MULAI SESI 3" },
+        { id: 3, text: "Sesi 3: WAJAH SERONG KIRI", btnNext: "MULAI SESI 4" },
         { id: 4, text: "Sesi 4: WAJAH SERONG KANAN", btnNext: "MULAI" }
     ];
+
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('canvas');
+
+    // Minta izin akses kamera lokal (client-side)
+    navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
+        .then(function(stream) {
+            video.srcObject = stream;
+        })
+        .catch(function(err) {
+            document.getElementById("status").innerText = "Gagal mengakses kamera client: " + err;
+            console.error("Webcam Error: ", err);
+        });
 
     function mulaiSesi(nomorSesi) {
         let config = sesiList[nomorSesi - 1];
@@ -65,45 +71,48 @@
         document.getElementById("btn-container").innerHTML = '<button class="btn btn-secondary disabled w-100">Sedang Merekam...</button>';
         
         countSesi = 0;
-        
-        // --- PERUBAHAN UTAMA: PANGGIL FUNGSI REKURSIF ---
         ambilSatuFoto(nomorSesi); 
     }
 
     function ambilSatuFoto(nomorSesi) {
-        // Cek Stop Condition
         if (countSesi >= 20) {
             siapkanSesiBerikutnya(nomorSesi);
             return;
         }
 
-        totalFoto++; // Naikkan counter global
+        totalFoto++;
+
+        // Draw frame to hidden canvas
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imgBase64 = canvas.toDataURL('image/jpeg');
 
         fetch('/api/simpan_frame', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ user_id: userId, urutan: totalFoto })
+            body: JSON.stringify({ 
+                user_id: userId, 
+                urutan: totalFoto,
+                image: imgBase64
+            })
         })
         .then(response => response.json())
         .then(data => {
             if(data.status === 'success') {
-                countSesi++; // Hitung sukses
+                countSesi++;
                 updateProgress();
                 document.getElementById("status").innerText = "Foto tersimpan: " + countSesi + "/20 (Total: " + totalFoto + ")";
                 
-                // --- REKURSIF: Panggil diri sendiri SETELAH sukses ---
-                // Kasih jeda dikit 200ms biar user sempat gerak/napas
                 setTimeout(() => {
                     ambilSatuFoto(nomorSesi);
                 }, 200); 
                 
             } else {
-                // Kalau gagal (misal wajah gak ketemu), jangan naikkan counter, tapi coba lagi
-                // Kurangi totalFoto karena file gagal disimpan
                 totalFoto--; 
-                document.getElementById("status").innerText = "Mencari wajah... (Pastikan wajah di kotak)";
+                document.getElementById("status").innerText = "Mencari wajah... (Pastikan wajah menghadap ke kamera)";
                 
-                // Coba lagi langsung
                 setTimeout(() => {
                     ambilSatuFoto(nomorSesi);
                 }, 100);
@@ -111,14 +120,12 @@
         })
         .catch(err => {
             console.error(err);
-            // Kalau error jaringan, coba lagi
             totalFoto--;
             setTimeout(() => { ambilSatuFoto(nomorSesi); }, 500);
         });
     }
 
     function updateProgress() {
-        // Progress per sesi saja biar enak dilihat (0-100% per sesi)
         let persen = (countSesi / 20) * 100;
         document.getElementById("progressBar").style.width = persen + "%";
         document.getElementById("progressBar").innerText = Math.round(persen) + "%";
@@ -131,7 +138,6 @@
             document.getElementById("btn-container").innerHTML = 
                 `<button onclick="mulaiSesi(${nomorSesi + 1})" class="btn btn-warning btn-lg w-100 fw-bold">${nextConfig.btnNext}</button>`;
             
-            // Reset Progress Bar visual
             document.getElementById("progressBar").className = "progress-bar bg-warning";
         } else {
             document.getElementById("instruksi").innerText = "PENGAMBILAN DATA SELESAI!";

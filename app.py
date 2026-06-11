@@ -97,29 +97,38 @@ def view_ambil_dataset(user_id):
 # API: Dipanggil oleh Javascript untuk simpan 1 foto
 @app.route('/api/simpan_frame', methods=['POST'])
 def simpan_frame():
-    global global_frame # Panggil variabel global tadi
+    global global_frame
     
     data = request.get_json()
     user_id = data['user_id']
     urutan = data['urutan']
 
-    # Cek apakah global_frame sudah ada isinya?
-    if global_frame is not None:
-        # Kita pakai frame dari global, tidak perlu baca kamera lagi
-        gray = cv2.cvtColor(global_frame, cv2.COLOR_BGR2GRAY)
-        faces = face_detector.detectMultiScale(gray, 1.3, 5)
-        
-        if len(faces) > 0:
-            (x, y, w, h) = faces[0]
-            wajah = gray[y:y+h, x:x+w]
-            
-            path = f"dataset/User.{user_id}.{urutan}.jpg"
-            cv2.imwrite(path, wajah)
-            return jsonify({'status': 'success', 'pesan': f'Foto {urutan} tersimpan'})
-        else:
-            return jsonify({'status': 'error', 'pesan': 'Wajah tidak terdeteksi'})
+    # Cek apakah ada base64 image dari client?
+    if 'image' in data:
+        try:
+            img_data = data['image']
+            img_bytes = base64.b64decode(img_data.split(',')[1])
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        except Exception as e:
+            return jsonify({'status': 'error', 'pesan': f'Gagal memproses gambar: {e}'})
+    elif global_frame is not None:
+        frame = global_frame
     else:
         return jsonify({'status': 'error', 'pesan': 'Kamera belum siap'})
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_detector.detectMultiScale(gray, 1.3, 5)
+    
+    if len(faces) > 0:
+        (x, y, w, h) = faces[0]
+        wajah = gray[y:y+h, x:x+w]
+        
+        path = f"dataset/User.{user_id}.{urutan}.jpg"
+        cv2.imwrite(path, wajah)
+        return jsonify({'status': 'success', 'pesan': f'Foto {urutan} tersimpan'})
+    else:
+        return jsonify({'status': 'error', 'pesan': 'Wajah tidak terdeteksi'})
 
 # --- FITUR TRAINING WEB ---
 @app.route('/admin/train_model')
