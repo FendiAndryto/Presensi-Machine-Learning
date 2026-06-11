@@ -63,7 +63,7 @@ def create_tables():
             lokasi_masuk VARCHAR(100),
             lokasi_pulang VARCHAR(100),
             status_kehadiran VARCHAR(20),
-            durasi_kerja INTERVAL,
+            durasi_kerja INTERVAL GENERATED ALWAYS AS (jam_pulang - jam_masuk) STORED,
             FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
         """
