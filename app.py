@@ -97,7 +97,7 @@ def cek_kualitas_foto(frame):
         
     # 2. Cek Blur (Variance of Laplacian)
     blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-    if blur_score < 80:
+    if blur_score < 30:  # Diturunkan dari 80 ke 30 agar HP (kamera anti-noise) bisa lolos
         return False, "Foto blur atau goyang! Harap diam sejenak saat absen."
         
     return True, ""
