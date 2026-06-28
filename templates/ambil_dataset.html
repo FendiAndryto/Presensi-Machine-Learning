@@ -75,7 +75,7 @@
     }
 
     function ambilSatuFoto(nomorSesi) {
-        if (countSesi >= 20) {
+        if (countSesi >= 10) {
             siapkanSesiBerikutnya(nomorSesi);
             return;
         }
@@ -103,7 +103,7 @@
             if(data.status === 'success') {
                 countSesi++;
                 updateProgress();
-                document.getElementById("status").innerText = "Foto tersimpan: " + countSesi + "/20 (Total: " + totalFoto + ")";
+                document.getElementById("status").innerText = "Foto tersimpan: " + countSesi + "/10 (Total: " + totalFoto + ")";
                 
                 setTimeout(() => {
                     ambilSatuFoto(nomorSesi);
@@ -126,7 +126,7 @@
     }
 
     function updateProgress() {
-        let persen = (countSesi / 20) * 100;
+        let persen = (countSesi / 10) * 100;
         document.getElementById("progressBar").style.width = persen + "%";
         document.getElementById("progressBar").innerText = Math.round(persen) + "%";
     }
