@@ -6,7 +6,7 @@ Sistem presensi modern berbasis web yang mengintegrasikan teknologi **Computer V
 
 ## 📌 Deskripsi Proyek
 
-Aplikasi ini dikembangkan menggunakan **Python Flask** sebagai framework web utama, **PostgreSQL** untuk manajemen database relasional yang andal, dan **OpenCV (Haar Cascade & LBPH)** untuk proses pendeteksian serta pengenalan wajah pengguna secara realtime baik dari webcam server/desktop maupun dari browser perangkat mobile (HP). 
+Aplikasi ini dikembangkan menggunakan **Python Flask** sebagai framework web utama, **PostgreSQL** untuk manajemen database relasional yang andal, dan **Deep Learning (dlib & face_recognition)** untuk proses pendeteksian serta pengenalan wajah pengguna secara realtime (menggantikan sistem lama OpenCV Haar Cascade & LBPH untuk akurasi lebih tinggi). Aplikasi ini terintegrasi penuh dengan **Docker** untuk mempermudah proses deployment. 
 
 Sistem ini juga dilengkapi dengan mekanisme **Geo-fencing** yang membatasi jarak presensi karyawan berdasarkan koordinat kantor yang ditentukan, dengan pengecualian fleksibilitas khusus untuk divisi tertentu (seperti Divisi *Marketing*).
 
@@ -18,10 +18,14 @@ Sistem ini juga dilengkapi dengan mekanisme **Geo-fencing** yang membatasi jarak
 * Login aman menggunakan enkripsi password dengan metode **PBKDF2/SHA256 Hash** (`werkzeug.security`).
 * Pembagian otorisasi akses (role-based access) antara **Super Admin** dan **Staff**.
 
-### 2. 👤 Face Recognition Pintar (LBPH)
-* **Pengambilan Dataset Wajah Terpandu**: Alur pengambilan dataset wajah terbagi menjadi 4 sesi terarah (Wajah Datar, Wajah Senyum, Serong Kiri, dan Serong Kanan) untuk akurasi data.
-* **Pelatihan Model Langsung (Online Training)**: Admin dapat melatih sistem mengenali wajah pengguna baru langsung dari dasbor web.
-* **Face Recognition Real-Time**: Verifikasi kehadiran menggunakan kamera laptop/PC maupun kamera perangkat mobile via WebRTC.
+### 2. 👤 Face Recognition Deep Learning (dlib)
+* **Pengambilan Dataset Wajah Terpandu**: Alur pengambilan dataset wajah terarah untuk mengekstrak *encoding* (128D embeddings) presisi tinggi.
+* **Training & Encoding Cepat**: Dataset wajah langsung diekstraksi menjadi embedding vektor (.pkl) tanpa perlu proses re-training LBPH yang lama.
+* **Akurasi Real-Time**: Verifikasi kehadiran menggunakan kamera laptop/PC maupun perangkat mobile (WebRTC) dengan tingkat toleransi (threshold) ketat sebesar 0.45 untuk meminimalisir kesalahan.
+
+### 2.5 📸 Validasi Kualitas Gambar Cerdas
+* **Anti-Blur & Anti-Gelap**: Sistem otomatis menolak foto jika kondisi pencahayaan buruk (terlalu gelap / terlalu silau) atau gambar blur (deteksi varians Laplacian).
+* **Validasi Jarak Wajah**: Otomatis menolak foto jika wajah pengguna terlalu jauh (< 5% luas layar) atau terlalu dekat (> 60% luas layar).
 
 ### 3. 📍 Pembatasan Jarak Geofencing (Geo-Location)
 * Mengukur jarak koordinat geografis *real-time* user dengan titik koordinat pusat kantor menggunakan rumus **Haversine**.
@@ -40,8 +44,9 @@ Sistem ini juga dilengkapi dengan mekanisme **Geo-fencing** yang membatasi jarak
 
 * **Bahasa Pemrograman:** Python 3.x
 * **Web Framework:** Flask
-* **Computer Vision:** OpenCV (Haar Cascades untuk deteksi wajah, Local Binary Patterns Histograms / LBPH untuk pengenalan wajah)
+* **Computer Vision:** `dlib` & `face_recognition` (untuk 128D Face Embeddings), OpenCV (untuk pemrosesan citra & validasi kualitas)
 * **Sistem Database:** PostgreSQL (`psycopg2`)
+* **Environment & Deployment:** Docker & Docker Compose
 * **Pengolahan & Ekspor Data:** Pandas & openpyxl
 * **UI/UX Design:** Bootstrap 5, FontAwesome, Custom Glassmorphism CSS, LogoGlobal branding integration
 
@@ -55,7 +60,7 @@ Presensi-Machine-Learning/
 ├── dataset/                    # Foto-foto wajah sampel hasil capture pengguna
 ├── static/                     # Aset statis (Custom CSS, JS, Gambar, LogoGlobal.png)
 ├── templates/                  # Template HTML (Dashboard, Laporan, Izin, dll)
-├── trainer/                    # Model latih pengenalan wajah hasil training (trainer.yml)
+├── encodings/                  # Data 128D Face Embeddings (face_encodings.pkl)
 │
 ├── app.py                      # Server aplikasi utama Flask & API Endpoints
 ├── setup_database_final.py     # Script inisialisasi & seeder database PostgreSQL
@@ -68,13 +73,13 @@ Presensi-Machine-Learning/
 
 ---
 
-## ⚙️ Panduan Instalasi & Konfigurasi
+## ⚙️ Panduan Instalasi & Konfigurasi (Via Docker)
+
+Proyek ini telah dikonfigurasi menggunakan **Docker** & **Docker Compose**. Sangat disarankan untuk menggunakan Docker karena instalasi library `dlib` secara manual (terutama di Windows) memerlukan setup CMake dan C++ Build Tools yang cukup rumit.
 
 ### 1. Prasyarat Sistem
-Pastikan Anda sudah menginstal beberapa software berikut:
-* **Python 3.8 - 3.11**
-* **PostgreSQL Database Server**
-* **Kamera/Webcam Aktif**
+* **Docker Desktop** (Windows / macOS) atau **Docker Engine** (Linux)
+* Kamera / Webcam aktif
 
 ### 2. Kloning Repositori
 ```bash
@@ -82,50 +87,23 @@ git clone https://github.com/FendiAndryto/Presensi-Machine-Learning.git
 cd Presensi-Machine-Learning
 ```
 
-### 3. Setup Virtual Environment
+### 3. Setup Environment Variables
+Buat salinan konfigurasi dari `.env.example` ke `.env`:
 ```bash
-python -m venv .venv
+cp .env.example .env
 ```
-Aktifkan virtual environment:
-* **Windows:**
-  ```powershell
-  .venv\Scripts\activate
-  ```
-* **macOS / Linux:**
-  ```bash
-  source .venv/bin/activate
-  ```
+*(Anda dapat mengubah kredensial database di dalam file `.env` jika diperlukan).*
 
-### 4. Instalasi Dependency
-Instal pustaka-pustaka Python yang diperlukan:
+### 4. Build & Jalankan Container
+Jalankan perintah berikut di terminal:
 ```bash
-pip install flask opencv-python opencv-contrib-python psycopg2 numpy pillow pandas openpyxl requests
+docker-compose up --build -d
 ```
-> [!IMPORTANT]
-> Pastikan menginstal `opencv-contrib-python` karena modul `cv2.face` (pengenal LBPH) berada di paket kontribusi tersebut, bukan di paket OpenCV standar.
+*Proses ini akan mengunduh base image, meng-compile dependensi `dlib`, melakukan inisialisasi database PostgreSQL (termasuk migrasi tabel otomatis via `setup_database_final.py`), dan menjalankan server Flask.*
 
-### 5. Setup Database PostgreSQL
-1. Buat database baru di PostgreSQL dengan nama `skripsi_db`.
-2. Buka berkas `setup_database_final.py` dan sesuaikan kredensial koneksi berikut dengan server lokal Anda:
-   ```python
-   DB_NAME = "skripsi_db"
-   DB_USER = "postgres"
-   DB_PASS = ""
-   DB_HOST = "localhost"
-   ```
-3. Jalankan script inisialisasi tabel & data seeder:
-   ```bash
-   python setup_database_final.py
-   ```
-   *Script ini otomatis akan membuat struktur tabel `divisi`, `users`, `lokasi_kantor`, dan `absensi`, serta menambahkan data akun bawaan untuk pengujian.*
-
-### 6. Jalankan Aplikasi
-Jalankan server aplikasi Flask:
-```bash
-python app.py
-```
-Buka browser Anda dan akses halaman login di alamat:
-[http://127.0.0.1:5000](http://127.0.0.1:5000)
+### 5. Akses Aplikasi
+Buka browser Anda dan akses:
+[http://localhost:5000](http://localhost:5000)
 
 ---
 
@@ -142,16 +120,15 @@ Buka browser Anda dan akses halaman login di alamat:
 
 ## 📷 Alur Penggunaan Sistem
 
-1. **Inisialisasi Awal**: Jalankan script `setup_database_final.py` untuk mengeset PostgreSQL.
+1. **Inisialisasi Awal**: Container Docker akan otomatis menjalankan `setup_database_final.py` untuk menyiapkan database PostgreSQL.
 2. **Pendaftaran Karyawan**: Admin masuk ke panel admin, menu **Kelola User**, dan mendaftarkan staff baru.
 3. **Perekaman Dataset Wajah**:
    * Admin menekan tombol **Ambil Dataset** untuk staff bersangkutan.
-   * Ikuti arahan kamera untuk merekam wajah staff dalam 4 sesi gerakan agar variasi wajah terekam dengan baik.
-4. **Model Training (Pelatihan Otak AI)**: Setelah selesai mengambil data wajah, klik **Train Model** pada halaman Admin untuk memperbarui model pengenal (`trainer.yml`).
-5. **Proses Presensi**:
+   * Ikuti arahan kamera. Sistem akan memvalidasi cahaya dan jarak wajah. Jika lolos validasi, data `face_encodings.pkl` akan otomatis diperbarui (Training otomatis).
+4. **Proses Presensi**:
    * Staff login ke dasbor masing-masing, sistem akan mendeteksi koordinat lokasi staff.
-   * Kamera pada dasbor (atau fitur mobile absensi) diaktifkan untuk mencocokkan wajah staff bersangkutan dengan model.
-   * Jika wajah terdeteksi cocok dengan akun login dan posisi koordinat valid (berada di dalam geofence kantor / pengecualian marketing), presensi **Masuk** atau **Pulang** akan tercatat secara otomatis ke database.
+   * Kamera pada dasbor (WebRTC) diaktifkan untuk mencocokkan wajah staff dengan model. Wajah harus jelas, cukup cahaya, dan proporsional.
+   * Jika wajah dikenali dan posisi koordinat valid (berada di dalam geofence kantor / pengecualian marketing), presensi **Masuk** atau **Pulang** akan tercatat secara otomatis.
 
 ---
 
