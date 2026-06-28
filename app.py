@@ -226,77 +226,89 @@ def simpan_frame():
         return jsonify({'status': 'error', 'pesan': 'Wajah tidak terdeteksi'})
 
 # --- FITUR TRAINING WEB ---
+is_training = False
+
 @app.route('/admin/train_model')
 def train_model_web():
     if 'user_id' not in session or session['role'] != 'Admin': return redirect(url_for('index'))
     
-    # --- GENERATE FACE ENCODINGS (Deep Learning) ---
-    path = 'dataset'
-    if not os.path.exists(path): os.makedirs(path)
+    global is_training
+    if is_training:
+        flash('Proses training sedang berjalan di latar belakang, mohon tunggu beberapa saat.', 'warning')
+        return redirect(url_for('kelola_users'))
+        
+    is_training = True
     
-    all_encodings = []
-    all_ids = []
-    gagal_count = 0
-    
-    image_files = [f for f in os.listdir(path) if f.endswith('.jpg')]
-    
-    for filename in image_files:
+    def background_train():
+        global is_training
         try:
-            user_id = int(filename.split(".")[1])
-            filepath = os.path.join(path, filename)
+            # --- GENERATE FACE ENCODINGS (Deep Learning) ---
+            path = 'dataset'
+            if not os.path.exists(path): os.makedirs(path)
             
-            # Skip file corrupt (terlalu kecil)
-            if os.path.getsize(filepath) < 2000:
-                gagal_count += 1
-                continue
+            all_encodings = []
+            all_ids = []
+            gagal_count = 0
             
-            # Load gambar (handle grayscale lama & color baru)
-            img = face_recognition.load_image_file(filepath)
-            h, w = img.shape[:2]
+            image_files = [f for f in os.listdir(path) if f.endswith('.jpg')]
             
-            # Coba deteksi wajah otomatis dulu
-            face_locations = face_recognition.face_locations(img, model='hog')
+            for filename in image_files:
+                try:
+                    user_id = int(filename.split(".")[1])
+                    filepath = os.path.join(path, filename)
+                    
+                    # Skip file corrupt (terlalu kecil)
+                    if os.path.getsize(filepath) < 2000:
+                        gagal_count += 1
+                        continue
+                    
+                    # Load gambar (handle grayscale lama & color baru)
+                    img = face_recognition.load_image_file(filepath)
+                    h, w = img.shape[:2]
+                    
+                    # Coba deteksi wajah otomatis dulu
+                    face_locations = face_recognition.face_locations(img, model='hog')
+                    
+                    if len(face_locations) == 0:
+                        # Gambar sudah berupa crop wajah → pakai seluruh gambar
+                        face_locations = [(0, w, h, 0)]
+                    
+                    encodings = face_recognition.face_encodings(img, face_locations)
+                    
+                    if len(encodings) > 0:
+                        all_encodings.append(encodings[0])
+                        all_ids.append(user_id)
+                    else:
+                        gagal_count += 1
+                        print(f"[WARNING] Gagal generate encoding: {filename}")
+                        
+                except Exception as e: 
+                    gagal_count += 1
+                    print(f"[WARNING] Gagal memproses gambar {filename}: {e}")
+                    continue
             
-            if len(face_locations) == 0:
-                # Gambar sudah berupa crop wajah → pakai seluruh gambar
-                face_locations = [(0, w, h, 0)]
-            
-            encodings = face_recognition.face_encodings(img, face_locations)
-            
-            if len(encodings) > 0:
-                all_encodings.append(encodings[0])
-                all_ids.append(user_id)
-            else:
-                gagal_count += 1
-                print(f"[WARNING] Gagal generate encoding: {filename}")
+            if len(all_ids) > 0:
+                # Simpan ke file pickle
+                data = {
+                    'encodings': all_encodings,
+                    'ids': all_ids
+                }
+                if not os.path.exists('encodings'):
+                    os.makedirs('encodings')
+                with open(ENCODINGS_PATH, 'wb') as f:
+                    pickle.dump(data, f)
                 
-        except Exception as e: 
-            gagal_count += 1
-            print(f"[WARNING] Gagal memproses gambar {filename}: {e}")
-            continue
+                # Reload ke memory
+                load_encodings()
+                print(f"[INFO] Encoding selesai di background. Berhasil: {len(all_ids)}, Gagal: {gagal_count}")
+        finally:
+            is_training = False
+
+    # Jalankan proses di background thread
+    thread = threading.Thread(target=background_train)
+    thread.start()
     
-    if len(all_ids) > 0:
-        # Simpan ke file pickle
-        data = {
-            'encodings': all_encodings,
-            'ids': all_ids
-        }
-        if not os.path.exists('encodings'):
-            os.makedirs('encodings')
-        with open(ENCODINGS_PATH, 'wb') as f:
-            pickle.dump(data, f)
-        
-        # Reload ke memory
-        load_encodings()
-        
-        unique_users = len(set(all_ids))
-        msg = f'Encoding Selesai! {unique_users} User ({len(all_ids)} foto) berhasil diproses.'
-        if gagal_count > 0:
-            msg += f' ({gagal_count} foto gagal)'
-        flash(msg, 'success')
-    else:
-        flash('Data dataset kosong! Tidak bisa generate encoding.', 'danger')
-        
+    flash('Proses encoding (Deep Learning) dimulai di latar belakang. Proses ini butuh waktu beberapa menit. Silakan refresh halaman ini nanti.', 'success')
     return redirect(url_for('kelola_users'))
 
 # --- ROUTES AUTHENTICATION (LOGIN/LOGOUT) ---
