@@ -56,7 +56,7 @@
                 
                 <div class="card-body bg-dark p-0" style="min-height: 400px; position: relative; overflow: hidden;">
                     <div id="area-laptop" style="width: 100%; height: 100%;">
-                        <img src="{{ url_for('video_feed') }}" style="width: 100%; height: 100%; object-fit: cover;">
+                        <img id="video-laptop" src="{{ url_for('video_feed') }}" style="width: 100%; height: 100%; object-fit: cover;">
                         <div class="scan-line"></div>
                     </div>
                     <div id="area-hp" style="display: none; width: 100%; height: 100%;">
@@ -101,12 +101,11 @@
     const isNgrok = hostname.includes('ngrok');
     const isMobile = /Mobi|Android|iPhone/i.test(navigator.userAgent);
     
-    const isRemote = !isLocal || isCloudflare || isNgrok || isMobile;
+    const isRemote = true; // FORCE ALWAYS REMOTE (DOCKER)
 
     if (isRemote) {
         // [PASANG SATPAM FRONTEND]
-        // Cari element gambar yang nembak ke video_feed
-        const serverImg = document.querySelector('img[src*="video_feed"]');
+        const serverImg = document.getElementById('video-laptop');
         if (serverImg) {
             serverImg.src = ""; // Putus link-nya biar server gak kepanggil
             serverImg.remove(); // Hapus element-nya dari HTML
@@ -118,7 +117,7 @@
         document.getElementById('area-hp').style.display = 'block';
         document.getElementById('btn-absen-hp').style.display = 'block';
         
-        document.getElementById('badge-mode').innerText = "REMOTE ACCESS";
+        document.getElementById('badge-mode').innerText = "CAMERA AKTIF";
         document.getElementById('badge-mode').className = "badge bg-success animate-pulse";
 
         navigator.mediaDevices.getUserMedia({ video: true })
@@ -128,8 +127,6 @@
         .catch(function(err) {
             Swal.fire('Kamera Error', "Harap izinkan akses kamera di browser Anda: " + err, 'error');
         });
-    } else {
-        console.log("Running in Local Mode (Server Camera Active)");
     }
     
     updateJarakRealtime();
@@ -230,11 +227,20 @@
         btn.disabled = true;
         btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-2"></i>Memproses...';
 
+        // Capture frame dari MJPEG stream ke canvas
+        const img = document.getElementById('video-laptop');
+        const canvas = document.getElementById('canvas-hp');
+        canvas.width = img.naturalWidth || 640;
+        canvas.height = img.naturalHeight || 480;
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        const imgBase64 = canvas.toDataURL('image/jpeg');
+
         navigator.geolocation.getCurrentPosition(function(position) {
             fetch('/proses_absen', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
+                    image: imgBase64,
                     latitude: position.coords.latitude, 
                     longitude: position.coords.longitude 
                 }),

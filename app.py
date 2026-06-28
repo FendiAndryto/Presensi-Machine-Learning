@@ -13,11 +13,13 @@ import base64
 from flask import send_file, flash, get_flashed_messages
 from io import BytesIO
 import pandas as pd
+import face_recognition
+import pickle
 
 global_frame = None
 last_detected_id = 0 
 last_detected_name = "Unknown"
-frame_lock = threading.Lock() # <-- TAMBAHKAN INI
+frame_lock = threading.Lock()
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -58,15 +60,105 @@ def get_name_by_id(user_id):
         print(f"[ERROR] Gagal load nama untuk ID {user_id}: {e}")
     return f"User {user_id}"
 
-# --- SETUP COMPUTER VISION (YANG SUDAH DIPERBAIKI) ---
+# --- SETUP FACE RECOGNITION (DEEP LEARNING) ---
 
 cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-face_detector = cv2.CascadeClassifier(cascade_path)
-recognizer = cv2.face.LBPHFaceRecognizer_create()
+face_detector = cv2.CascadeClassifier(cascade_path)  # Tetap dipakai untuk dataset capture
 
-# Cek apakah file otak AI ada? Kalau ada, muat.
-if os.path.exists('trainer/trainer.yml'):
-    recognizer.read('trainer/trainer.yml')
+ENCODINGS_PATH = 'encodings/face_encodings.pkl'
+FACE_TOLERANCE = 0.45  # Diperketat dari 0.6 ke 0.45 untuk mencegah false positive
+known_face_encodings = []
+known_face_ids = []
+
+def load_encodings():
+    """Muat data encoding wajah dari file pickle ke memory."""
+    global known_face_encodings, known_face_ids
+    if os.path.exists(ENCODINGS_PATH):
+        with open(ENCODINGS_PATH, 'rb') as f:
+            data = pickle.load(f)
+            known_face_encodings = data.get('encodings', [])
+            known_face_ids = data.get('ids', [])
+        print(f"[INFO] Loaded {len(set(known_face_ids))} user ({len(known_face_ids)} encoding) dari {ENCODINGS_PATH}")
+    else:
+        known_face_encodings = []
+        known_face_ids = []
+        print("[INFO] File encoding belum ada. Silakan generate encoding terlebih dahulu.")
+
+def cek_kualitas_foto(frame):
+    """Cek kualitas foto (gelap/silau/blur). Return (True, "") jika bagus, (False, pesan_error) jika jelek."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # 1. Cek Kecerahan (Brightness)
+    kecerahan = np.mean(gray)
+    if kecerahan < 40:
+        return False, "Foto terlalu gelap! Harap cari tempat yang lebih terang."
+    if kecerahan > 220:
+        return False, "Foto terlalu silau (terang)! Hindari pantulan cahaya langsung."
+        
+    # 2. Cek Blur (Variance of Laplacian)
+    blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+    if blur_score < 80:
+        return False, "Foto blur atau goyang! Harap diam sejenak saat absen."
+        
+    return True, ""
+
+def recognize_face(frame):
+    """Detect dan kenali wajah dari sebuah frame.
+    Returns: (user_id, nama, distance) atau (0, 'Pesan Error', 1.0) jika gagal.
+    """
+    # Validasi kualitas gambar (Cahaya & Blur)
+    kualitas_ok, pesan_kualitas = cek_kualitas_foto(frame)
+    if not kualitas_ok:
+        return 0, pesan_kualitas, 1.0
+        
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    
+    # Resize untuk performa (0.5x)
+    small_frame = cv2.resize(rgb_frame, (0, 0), fx=0.5, fy=0.5)
+    face_locations = face_recognition.face_locations(small_frame, model='hog')
+    
+    if len(face_locations) == 0:
+        return 0, "Wajah tidak terdeteksi di kamera!", 1.0
+        
+    # Validasi Jarak Wajah (berdasarkan ukuran frame vs ukuran bounding box)
+    h_frame, w_frame, _ = small_frame.shape
+    luas_frame = h_frame * w_frame
+    
+    # Ambil wajah pertama
+    top, right, bottom, left = face_locations[0]
+    luas_wajah = (bottom - top) * (right - left)
+    rasio_wajah = luas_wajah / luas_frame
+    
+    if rasio_wajah < 0.05: # Wajah < 5% dari layar
+        return 0, "Wajah terlalu jauh! Harap dekatkan wajah ke kamera.", 1.0
+    if rasio_wajah > 0.60: # Wajah > 60% dari layar
+        return 0, "Wajah terlalu dekat dengan kamera! Harap mundur sedikit.", 1.0
+    
+    face_encs = face_recognition.face_encodings(small_frame, face_locations)
+    if len(face_encs) == 0:
+        return 0, "Gagal mengekstrak fitur wajah!", 1.0
+    
+    face_enc = face_encs[0]
+    
+    if len(known_face_encodings) == 0:
+        return 0, "Unknown", 1.0
+    
+    # Bandingkan dengan semua encoding yang tersimpan
+    distances = face_recognition.face_distance(known_face_encodings, face_enc)
+    best_idx = int(np.argmin(distances))
+    best_distance = distances[best_idx]
+    
+    if best_distance <= FACE_TOLERANCE:
+        user_id = known_face_ids[best_idx]
+        name = get_name_by_id(user_id)
+        return user_id, name, float(best_distance)
+    
+    return 0, "Wajah asing (Tidak dikenali)!", float(best_distance)
+
+# Muat encoding saat aplikasi pertama kali dijalankan
+if not os.path.exists('encodings'):
+    os.makedirs('encodings')
+load_encodings()
 
 # --- FUNGSI BANTUAN ---
 
@@ -122,10 +214,13 @@ def simpan_frame():
     
     if len(faces) > 0:
         (x, y, w, h) = faces[0]
-        wajah = gray[y:y+h, x:x+w]
+        
+        # Simpan crop wajah BERWARNA (untuk face_recognition deep learning)
+        wajah_color = frame[y:y+h, x:x+w]
+        wajah_color = cv2.resize(wajah_color, (200, 200))
         
         path = f"dataset/User.{user_id}.{urutan}.jpg"
-        cv2.imwrite(path, wajah)
+        cv2.imwrite(path, wajah_color)
         return jsonify({'status': 'success', 'pesan': f'Foto {urutan} tersimpan'})
     else:
         return jsonify({'status': 'error', 'pesan': 'Wajah tidak terdeteksi'})
@@ -135,33 +230,72 @@ def simpan_frame():
 def train_model_web():
     if 'user_id' not in session or session['role'] != 'Admin': return redirect(url_for('index'))
     
-    # LOGIKA TRAINING (Copas dari latih_wajah.py tapi versi function)
+    # --- GENERATE FACE ENCODINGS (Deep Learning) ---
     path = 'dataset'
     if not os.path.exists(path): os.makedirs(path)
     
-    imagePaths = [os.path.join(path, f) for f in os.listdir(path)]
-    faceSamples = []
-    ids = []
+    all_encodings = []
+    all_ids = []
+    gagal_count = 0
     
-    for imagePath in imagePaths:
+    image_files = [f for f in os.listdir(path) if f.endswith('.jpg')]
+    
+    for filename in image_files:
         try:
-            PIL_img = Image.open(imagePath).convert('L')
-            img_numpy = np.array(PIL_img, 'uint8')
-            id = int(os.path.split(imagePath)[-1].split(".")[1])
-            faces = face_detector.detectMultiScale(img_numpy)
-            for (x, y, w, h) in faces:
-                faceSamples.append(img_numpy[y:y+h, x:x+w])
-                ids.append(id)
-        except Exception as e: 
-            print(f"[WARNING] Gagal memproses gambar {imagePath}: {e}")
-            continue # Lanjut ke foto berikutnya
+            user_id = int(filename.split(".")[1])
+            filepath = os.path.join(path, filename)
             
-    if len(ids) > 0:
-        recognizer.train(faceSamples, np.array(ids))
-        recognizer.write('trainer/trainer.yml')
-        flash(f'Training Selesai! {len(np.unique(ids))} User telah dipelajari.', 'success')
+            # Skip file corrupt (terlalu kecil)
+            if os.path.getsize(filepath) < 2000:
+                gagal_count += 1
+                continue
+            
+            # Load gambar (handle grayscale lama & color baru)
+            img = face_recognition.load_image_file(filepath)
+            h, w = img.shape[:2]
+            
+            # Coba deteksi wajah otomatis dulu
+            face_locations = face_recognition.face_locations(img, model='hog')
+            
+            if len(face_locations) == 0:
+                # Gambar sudah berupa crop wajah → pakai seluruh gambar
+                face_locations = [(0, w, h, 0)]
+            
+            encodings = face_recognition.face_encodings(img, face_locations)
+            
+            if len(encodings) > 0:
+                all_encodings.append(encodings[0])
+                all_ids.append(user_id)
+            else:
+                gagal_count += 1
+                print(f"[WARNING] Gagal generate encoding: {filename}")
+                
+        except Exception as e: 
+            gagal_count += 1
+            print(f"[WARNING] Gagal memproses gambar {filename}: {e}")
+            continue
+    
+    if len(all_ids) > 0:
+        # Simpan ke file pickle
+        data = {
+            'encodings': all_encodings,
+            'ids': all_ids
+        }
+        if not os.path.exists('encodings'):
+            os.makedirs('encodings')
+        with open(ENCODINGS_PATH, 'wb') as f:
+            pickle.dump(data, f)
+        
+        # Reload ke memory
+        load_encodings()
+        
+        unique_users = len(set(all_ids))
+        msg = f'Encoding Selesai! {unique_users} User ({len(all_ids)} foto) berhasil diproses.'
+        if gagal_count > 0:
+            msg += f' ({gagal_count} foto gagal)'
+        flash(msg, 'success')
     else:
-        flash('Data dataset kosong! Tidak bisa training.', 'danger')
+        flash('Data dataset kosong! Tidak bisa generate encoding.', 'danger')
         
     return redirect(url_for('kelola_users'))
 
@@ -587,18 +721,19 @@ def video_feed():
     def generate_frames():
         global global_frame, last_detected_id, last_detected_name
         
-        # JANGAN buka kamera laptop kalau diakses dari luar (Cloudflared/HP lain)
         if not is_local:
             print(f"[INFO] Akses luar terdeteksi ({host}). Kamera laptop tetap mati.")
             return
 
-        # Hanya jalankan ini kalau dibuka langsung di laptop server (localhost)
         cap = cv2.VideoCapture(0) 
 
         if not cap.isOpened():
             print("[ERROR] Tidak dapat mengakses kamera laptop.")
             return
 
+        frame_count = 0
+        cached_results = []  # Cache hasil deteksi: [(top, right, bottom, left, name, detected_id), ...]
+        
         while True:
             try:
                 success, frame = cap.read()
@@ -608,38 +743,61 @@ def video_feed():
                 with frame_lock:
                     global_frame = frame.copy()
 
-                # --- Logika Deteksi Wajah ---
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = face_detector.detectMultiScale(gray, 1.2, 5)
+                frame_count += 1
                 
-                if len(faces) == 0:
-                    with frame_lock:
-                        last_detected_id = 0
-                        last_detected_name = "Unknown"
-                
-                for (x, y, w, h) in faces:
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                    try:
-                        id_pred, confidence = recognizer.predict(gray[y:y+h, x:x+w])
-                        if confidence < 60: 
-                            with frame_lock:
-                                last_detected_id = id_pred
-                                last_detected_name = get_name_by_id(id_pred)
-                        else:
-                            with frame_lock:
-                                last_detected_id = 0
-                                last_detected_name = "Unknown"
+                # --- Deep Learning Face Recognition (setiap 3 frame untuk performa) ---
+                if frame_count % 3 == 0:
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    small_frame = cv2.resize(rgb_frame, (0, 0), fx=0.5, fy=0.5)
+                    
+                    face_locs = face_recognition.face_locations(small_frame, model='hog')
+                    
+                    if len(face_locs) == 0:
+                        cached_results = []
+                        with frame_lock:
+                            last_detected_id = 0
+                            last_detected_name = "Unknown"
+                    else:
+                        face_encs = face_recognition.face_encodings(small_frame, face_locs)
+                        new_results = []
                         
-                        cv2.putText(frame, last_detected_name, (x+5, y-5), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                    except Exception as e:
-                        pass
+                        for (top, right, bottom, left), face_enc in zip(face_locs, face_encs):
+                            # Scale balik ke ukuran asli (karena di-resize 0.5x)
+                            top *= 2; right *= 2; bottom *= 2; left *= 2
+                            
+                            name = "Unknown"
+                            detected_id = 0
+                            
+                            if len(known_face_encodings) > 0:
+                                distances = face_recognition.face_distance(known_face_encodings, face_enc)
+                                best_idx = int(np.argmin(distances))
+                                if distances[best_idx] <= FACE_TOLERANCE:
+                                    detected_id = known_face_ids[best_idx]
+                                    name = get_name_by_id(detected_id)
+                            
+                            new_results.append((top, right, bottom, left, name, detected_id))
+                        
+                        cached_results = new_results
+                        
+                        # Update global state (untuk display, bukan untuk absen)
+                        if new_results:
+                            with frame_lock:
+                                last_detected_id = new_results[0][5]
+                                last_detected_name = new_results[0][4]
+                
+                # Gambar hasil deteksi (dari cache) pada setiap frame
+                for (top, right, bottom, left, name, detected_id) in cached_results:
+                    color = (0, 255, 0) if detected_id != 0 else (0, 0, 255)
+                    cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
+                    cv2.putText(frame, name, (left + 5, top - 10), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
                 
                 ret, buffer = cv2.imencode('.jpg', frame)
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
             
             except Exception as e:
+                print(f"[ERROR] Video feed: {e}")
                 break
 
         cap.release()
@@ -685,25 +843,42 @@ def cek_jarak_realtime():
 
 @app.route('/proses_absen', methods=['POST'])
 def proses_absen():
-    global last_detected_id, last_detected_name
-    
-    with frame_lock:
-        current_id   = last_detected_id
-        current_name = last_detected_name
-    
-    if current_id == 0:
-        return jsonify({'status': 'error',
-                        'pesan': 'Wajah tidak dikenali! Harap posisikan wajah dengan benar.'})
+    """Proses absen via laptop (sekarang juga menerima image base64)."""
     
     if 'user_id' not in session:
         return jsonify({'status': 'error',
                         'pesan': 'Sesi habis. Silakan login ulang.'})
+    
+    data = request.get_json()
+    
+    # Ambil frame: dari image yang dikirim client, atau dari global_frame kamera
+    frame = None
+    if 'image' in data and data['image']:
+        try:
+            img_bytes = base64.b64decode(data['image'].split(',')[1])
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        except Exception as e:
+            return jsonify({'status': 'error', 'pesan': f'Gagal memproses gambar: {e}'})
+    else:
+        with frame_lock:
+            frame = global_frame.copy() if global_frame is not None else None
+    
+    if frame is None:
+        return jsonify({'status': 'error', 'pesan': 'Kamera belum siap!'})
+    
+    # --- Face Recognition (Deep Learning) ---
+    current_id, current_name, distance = recognize_face(frame)
+    
+    if current_id == 0:
+        return jsonify({'status': 'error',
+                        'pesan': current_name})
+    
     if session['user_id'] != current_id:
         return jsonify({'status': 'error',
                         'pesan': f'Wajah tidak cocok! Anda login sebagai {session["nama"]}, '
                                  f'tapi terdeteksi wajah {current_name}.'})
 
-    data = request.get_json()
     user_lat  = float(data['latitude'])
     user_long = float(data['longitude'])
 
@@ -711,7 +886,7 @@ def proses_absen():
         conn = get_db_connection()
         cur  = conn.cursor()
 
-        # ---- GEO‑FENCING -------------------------------------------------
+        # ---- GEO-FENCING -------------------------------------------------
         cur.execute("SELECT latitude, longitude, radius_meter FROM lokasi_kantor WHERE id = 1")
         kantor = cur.fetchone()
         jarak = hitung_jarak(user_lat, user_long,
@@ -754,7 +929,6 @@ def proses_absen():
                   f"{user_lat},{user_long}",
                   data_absen[0]))
             conn.commit()
-            # durasi_kerja ter‑generate otomatis oleh DB
             pesan = f"Absen PULANG Berhasil! Hati-hati di jalan, {session['nama']}."
 
         # -------- C: SUDAH LENGKAP ---------------------------------------
@@ -777,9 +951,10 @@ def proses_absen():
 # capture via javascript WebRTC
 @app.route('/proses_absen_mobile', methods=['POST'])
 def proses_absen_mobile():
+    """Proses absen via HP (kirim foto base64)."""
     try:
         data = request.get_json()
-        img_data   = data['image']               # base64
+        img_data   = data['image']
         user_lat   = float(data['latitude'])
         user_long  = float(data['longitude'])
 
@@ -787,82 +962,74 @@ def proses_absen_mobile():
         img_bytes = base64.b64decode(img_data.split(',')[1])
         nparr     = np.frombuffer(img_bytes, np.uint8)
         frame     = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        gray      = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # ---- Deteksi wajah -----------------------------------------------
-        faces = face_detector.detectMultiScale(gray, 1.2, 5)
-        if len(faces) == 0:
+        # ---- Face Recognition (Deep Learning) ----------------------------
+        id_wajah, nama_wajah, distance = recognize_face(frame)
+        
+        if id_wajah == 0:
             return jsonify({'status': 'error',
-                            'pesan': 'Wajah tidak terdeteksi! Pastikan wajah terlihat jelas di HP.'})
+                            'pesan': nama_wajah})
+        
+        if session.get('user_id') != id_wajah:
+            return jsonify({'status': 'error',
+                            'pesan': f'Bukan wajah {session["nama"]}! Terdeteksi: {nama_wajah}'})
 
-        for (x, y, w, h) in faces:
-            id_wajah, confidence = recognizer.predict(gray[y:y+h, x:x+w])
-            if confidence > 60:
-                return jsonify({'status': 'error',
-                                'pesan': 'Wajah tidak dikenali!'})
-            if session.get('user_id') != id_wajah:
-                return jsonify({'status': 'error',
-                                'pesan': f'Bukan wajah {session["nama"]}!'})
+        # ---- Logika absensi (sama dengan /proses_absen) ------------------
+        conn = get_db_connection()
+        cur  = conn.cursor()
 
-            # ---- Logika yang sama dengan /proses_absen ------------------
-            conn = get_db_connection()
-            cur  = conn.cursor()
+        # Geo-fencing
+        cur.execute("SELECT latitude, longitude, radius_meter FROM lokasi_kantor WHERE id = 1")
+        kantor = cur.fetchone()
+        jarak = hitung_jarak(user_lat, user_long,
+                             float(kantor[0]), float(kantor[1]))
+        radius_max = int(kantor[2])
+        is_marketing = (session.get('divisi_id') == 2)
 
-            # Geo‑fencing
-            cur.execute("SELECT latitude, longitude, radius_meter FROM lokasi_kantor WHERE id = 1")
-            kantor = cur.fetchone()
-            jarak = hitung_jarak(user_lat, user_long,
-                                 float(kantor[0]), float(kantor[1]))
-            radius_max = int(kantor[2])
-            is_marketing = (session.get('divisi_id') == 2)
-
-            if jarak > radius_max and not is_marketing:
-                cur.close(); conn.close()
-                return jsonify({'status': 'error',
-                                'pesan': f'Gagal! Lokasi terlalu jauh. Jarak: {int(jarak)}m'})
-
-            # Cek data hari ini
-            cur.execute("""
-                SELECT id, jam_masuk, jam_pulang
-                FROM absensi
-                WHERE user_id = %s AND tanggal = CURRENT_DATE
-            """, (id_wajah,))
-            data_absen = cur.fetchone()
-            waktu_sekarang = datetime.now().strftime('%H:%M:%S')
-
-            # ---- A: Masuk -------------------------------------------------
-            if data_absen is None:
-                cur.execute("""
-                    INSERT INTO absensi (user_id, jam_masuk, lokasi_masuk, status_kehadiran)
-                    VALUES (%s, %s, %s, %s)
-                """, (id_wajah, waktu_sekarang,
-                      f"{user_lat},{user_long}", "Hadir"))
-                pesan = f"Absen MASUK via HP Berhasil! Semangat, {session['nama']}."
-            # ---- B: Pulang ------------------------------------------------
-            elif data_absen[2] is None:
-                cur.execute("""
-                    UPDATE absensi
-                    SET jam_pulang = %s,
-                        lokasi_pulang = %s
-                    WHERE id = %s
-                """, (waktu_sekarang,
-                      f"{user_lat},{user_long}",
-                      data_absen[0]))
-                pesan = f"Absen PULANG via HP Berhasil! Hati-hati di jalan."
-                # durasi_kerja dihitung otomatis oleh DB
-            # ---- C: Sudah selesai -----------------------------------------
-            else:
-                cur.close(); conn.close()
-                return jsonify({'status': 'error',
-                                'pesan': 'Anda sudah selesai absen hari ini.'})
-
-            conn.commit()
+        if jarak > radius_max and not is_marketing:
             cur.close(); conn.close()
-            return jsonify({'status': 'success',
-                            'pesan': pesan,
-                            'jarak': f"{int(jarak)}m"})
+            return jsonify({'status': 'error',
+                            'pesan': f'Gagal! Lokasi terlalu jauh. Jarak: {int(jarak)}m'})
 
-        return jsonify({'status': 'error', 'pesan': 'Gagal memproses wajah.'})
+        # Cek data hari ini
+        cur.execute("""
+            SELECT id, jam_masuk, jam_pulang
+            FROM absensi
+            WHERE user_id = %s AND tanggal = CURRENT_DATE
+        """, (id_wajah,))
+        data_absen = cur.fetchone()
+        waktu_sekarang = datetime.now().strftime('%H:%M:%S')
+
+        # ---- A: Masuk -------------------------------------------------
+        if data_absen is None:
+            cur.execute("""
+                INSERT INTO absensi (user_id, jam_masuk, lokasi_masuk, status_kehadiran)
+                VALUES (%s, %s, %s, %s)
+            """, (id_wajah, waktu_sekarang,
+                  f"{user_lat},{user_long}", "Hadir"))
+            pesan = f"Absen MASUK via HP Berhasil! Semangat, {session['nama']}."
+        # ---- B: Pulang ------------------------------------------------
+        elif data_absen[2] is None:
+            cur.execute("""
+                UPDATE absensi
+                SET jam_pulang = %s,
+                    lokasi_pulang = %s
+                WHERE id = %s
+            """, (waktu_sekarang,
+                  f"{user_lat},{user_long}",
+                  data_absen[0]))
+            pesan = f"Absen PULANG via HP Berhasil! Hati-hati di jalan."
+        # ---- C: Sudah selesai -----------------------------------------
+        else:
+            cur.close(); conn.close()
+            return jsonify({'status': 'error',
+                            'pesan': 'Anda sudah selesai absen hari ini.'})
+
+        conn.commit()
+        cur.close(); conn.close()
+        return jsonify({'status': 'success',
+                        'pesan': pesan,
+                        'jarak': f"{int(jarak)}m"})
 
     except Exception as e:
         print(f"Error Mobile Absen: {e}")
@@ -1277,7 +1444,7 @@ def hapus_user(id):
     conn.commit()
     conn.close()
     
-    # Hapus juga dataset wajahnya (agar bersih dan hemat disk)
+    # Hapus dataset wajahnya
     import glob
     try:
         dataset_files = glob.glob(os.path.join('dataset', f"User.{id}.*.jpg"))
@@ -1287,6 +1454,31 @@ def hapus_user(id):
         print(f"[INFO] Dataset untuk User ID {id} berhasil dibersihkan.")
     except Exception as e:
         print(f"[WARNING] Gagal membersihkan dataset wajah User ID {id}: {e}")
+    
+    # Hapus encoding wajah dari pickle dan reload
+    try:
+        if os.path.exists(ENCODINGS_PATH):
+            with open(ENCODINGS_PATH, 'rb') as f:
+                enc_data = pickle.load(f)
+            
+            # Filter out encodings milik user yang dihapus
+            new_encodings = []
+            new_ids = []
+            for enc, uid in zip(enc_data['encodings'], enc_data['ids']):
+                if uid != id:
+                    new_encodings.append(enc)
+                    new_ids.append(uid)
+            
+            enc_data['encodings'] = new_encodings
+            enc_data['ids'] = new_ids
+            
+            with open(ENCODINGS_PATH, 'wb') as f:
+                pickle.dump(enc_data, f)
+            
+            load_encodings()  # Reload ke memory
+            print(f"[INFO] Encoding untuk User ID {id} berhasil dihapus.")
+    except Exception as e:
+        print(f"[WARNING] Gagal menghapus encoding User ID {id}: {e}")
     
     flash('User berhasil dihapus beserta data wajahnya.', 'warning')
     return redirect(url_for('kelola_users'))

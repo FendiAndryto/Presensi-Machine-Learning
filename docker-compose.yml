@@ -29,6 +29,7 @@ services:
     volumes:
       - ./dataset:/app/dataset
       - ./trainer:/app/trainer
+      - ./encodings:/app/encodings
       - ./static:/app/static
 
 volumes:

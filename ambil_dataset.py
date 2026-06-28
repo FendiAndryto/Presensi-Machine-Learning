@@ -1,5 +1,6 @@
 import cv2
 import os
+import numpy as np
 
 # --- KONFIGURASI ---
 cam = cv2.VideoCapture(0)
@@ -11,6 +12,20 @@ face_detector = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_front
 # Pastikan folder dataset ada
 if not os.path.exists('dataset'):
     os.makedirs('dataset')
+
+def cek_kualitas_foto(gray_frame):
+    """Cek kecerahan dan blur dari frame grayscale"""
+    kecerahan = np.mean(gray_frame)
+    if kecerahan < 40:
+        return False, "GELAP! Cari terang"
+    if kecerahan > 220:
+        return False, "SILAU! Mundur"
+        
+    blur_score = cv2.Laplacian(gray_frame, cv2.CV_64F).var()
+    if blur_score < 80:
+        return False, "BLUR! Diam"
+        
+    return True, ""
 
 print("\n[INFO] Memulai Pengambilan Data Wajah...")
 face_id = input('masukkan ID User (Angka, contoh: 1): ')
@@ -67,18 +82,37 @@ for sesi_ke in range(total_sesi):
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             faces = face_detector.detectMultiScale(gray, 1.3, 5)
 
+            h_frame, w_frame = gray.shape
+            luas_frame = h_frame * w_frame
+            pesan_error = ""
+
             for (x, y, w, h) in faces:
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                # Validasi jarak
+                luas_wajah = w * h
+                rasio_wajah = luas_wajah / luas_frame
+
+                if rasio_wajah < 0.05:
+                    pesan_error = "MAJU! Terlalu Jauh"
+                elif rasio_wajah > 0.60:
+                    pesan_error = "MUNDUR! Terlalu Dekat"
+                else:
+                    # Validasi cahaya & blur
+                    kualitas_ok, pesan_kualitas = cek_kualitas_foto(gray)
+                    if not kualitas_ok:
+                        pesan_error = pesan_kualitas
                 
-                count_total += 1
-                count_sesi += 1
+                # Gambar kotak wajah
+                warna_kotak = (0, 0, 255) if pesan_error else (0, 255, 0)
+                cv2.rectangle(frame, (x, y), (x+w, y+h), warna_kotak, 2)
                 
-                # Simpan ke folder dataset
-                # Format: User.ID.Urutan.jpg
-                cv2.imwrite(f"dataset/User.{face_id}.{count_total}.jpg", gray[y:y+h, x:x+w])
-                
-                # Tampilkan Progress
-                cv2.putText(frame, f"Ambil: {count_sesi}/{foto_per_sesi}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                if pesan_error:
+                    cv2.putText(frame, pesan_error, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                else:
+                    # Foto valid, simpan
+                    count_total += 1
+                    count_sesi += 1
+                    cv2.imwrite(f"dataset/User.{face_id}.{count_total}.jpg", gray[y:y+h, x:x+w])
+                    cv2.putText(frame, f"Ambil: {count_sesi}/{foto_per_sesi}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
             # Tampilkan Judul Sesi
             cv2.putText(frame, f"SEDANG MEREKAM: {instruksi_sesi[sesi_ke]}", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
