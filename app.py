@@ -184,6 +184,16 @@ def view_ambil_dataset(user_id):
     user = cur.fetchone()
     conn.close()
     
+    # Bersihkan foto dataset lama milik user ini sebelum mengambil yang baru
+    import glob
+    old_files = glob.glob(os.path.join('dataset', f"User.{user_id}.*.jpg"))
+    for f in old_files:
+        try:
+            if os.path.exists(f):
+                os.remove(f)
+        except:
+            pass
+            
     return render_template('ambil_dataset.html', user_id=user_id, nama_user=user[0])
 
 # API: Dipanggil oleh Javascript untuk simpan 1 foto
