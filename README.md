@@ -99,11 +99,17 @@ Jalankan perintah berikut di terminal:
 ```bash
 docker-compose up --build -d
 ```
-*Proses ini akan mengunduh base image, meng-compile dependensi `dlib`, melakukan inisialisasi database PostgreSQL (termasuk migrasi tabel otomatis via `setup_database_final.py`), dan menjalankan server Flask.*
+*Proses ini akan mengunduh base image Python, meng-compile dependensi `dlib` (membutuhkan waktu beberapa menit), melakukan instalasi semua modul, menyiapkan database PostgreSQL, dan menjalankan server Flask.*
 
-### 5. Akses Aplikasi
+### 5. Inisialisasi Database (Hanya 1x Saat Pertama Deploy)
+Setelah container berjalan, jalankan perintah ini di terminal untuk membuat tabel dan akun admin default:
+```bash
+docker exec -it presensi_web python setup_database_final.py
+```
+
+### 6. Akses Aplikasi
 Buka browser Anda dan akses:
-[http://localhost:5000](http://localhost:5000)
+[http://localhost:8000](http://localhost:8000)
 
 ---
 
@@ -120,7 +126,7 @@ Buka browser Anda dan akses:
 
 ## 📷 Alur Penggunaan Sistem
 
-1. **Inisialisasi Awal**: Container Docker akan otomatis menjalankan `setup_database_final.py` untuk menyiapkan database PostgreSQL.
+1. **Inisialisasi Awal**: Jalankan `docker exec -it presensi_web python setup_database_final.py` untuk mengeset tabel PostgreSQL.
 2. **Pendaftaran Karyawan**: Admin masuk ke panel admin, menu **Kelola User**, dan mendaftarkan staff baru.
 3. **Perekaman Dataset Wajah**:
    * Admin menekan tombol **Ambil Dataset** untuk staff bersangkutan.
