@@ -7,9 +7,9 @@
     <!-- Alert Training Model -->
     <div class="alert alert-info d-flex justify-content-between align-items-center shadow-sm">
         <span><i class="fa-solid fa-brain me-2"></i>Jangan lupa update AI setelah menambah dataset baru agar sistem mengenali wajah baru.</span>
-        <a href="/admin/train_model" class="btn btn-primary fw-bold" onclick="showTrainingLoading(event)">
+        <button class="btn btn-primary fw-bold" onclick="showTrainingLoading()">
             <i class="fa-solid fa-microchip me-2"></i>GENERATE ENCODING SEKARANG
-        </a>
+        </button>
     </div>
 
     <div class="row">
@@ -171,25 +171,79 @@
 
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script>
-    function showTrainingLoading(event) {
-        event.preventDefault();
-        const targetUrl = event.currentTarget.getAttribute('href');
-        
+    function showTrainingLoading() {
         Swal.fire({
-            title: 'Sedang Generate Encoding...',
-            text: 'Sistem sedang memproses dataset wajah dengan Deep Learning. Mohon tunggu, jangan tutup halaman ini.',
+            title: 'Mempersiapkan AI...',
+            html: `
+                <div class="mt-2 text-start">
+                    <p id="trainingStatusText" class="text-muted text-center mb-2">Menginisialisasi dataset...</p>
+                    <div class="progress" style="height: 25px;">
+                        <div id="trainingProgressBar" class="progress-bar progress-bar-striped progress-bar-animated bg-primary" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                    </div>
+                    <p id="trainingCount" class="text-center mt-2 fw-bold text-primary">0 / 0 Foto Diproses</p>
+                </div>
+            `,
             allowOutsideClick: false,
             allowEscapeKey: false,
             allowEnterKey: false,
             showConfirmButton: false,
             didOpen: () => {
-                Swal.showLoading();
-                // Arahkan ke URL tujuan setelah modal loading terbuka
-                setTimeout(() => {
-                    window.location.href = targetUrl;
-                }, 500);
+                // Panggil endpoint untuk mulai training
+                fetch('/api/start_training', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success' || data.status === 'warning') {
+                        // Mulai polling status
+                        checkTrainingStatus();
+                    } else {
+                        Swal.fire('Error', data.message || 'Gagal memulai proses', 'error');
+                    }
+                })
+                .catch(err => {
+                    Swal.fire('Error', 'Gagal menghubungi server', 'error');
+                });
             }
         });
+    }
+
+    function checkTrainingStatus() {
+        const interval = setInterval(() => {
+            fetch('/api/training_status')
+                .then(res => res.json())
+                .then(data => {
+                    const progressBar = document.getElementById('trainingProgressBar');
+                    const statusText = document.getElementById('trainingStatusText');
+                    const countText = document.getElementById('trainingCount');
+                    
+                    if (data.total > 0) {
+                        let percent = Math.round((data.current / data.total) * 100);
+                        progressBar.style.width = percent + '%';
+                        progressBar.setAttribute('aria-valuenow', percent);
+                        progressBar.innerText = percent + '%';
+                        
+                        countText.innerText = `${data.current} / ${data.total} Foto Diproses`;
+                        statusText.innerText = "Mengekstrak ciri wajah...";
+                    }
+                    
+                    if (data.status === 'done') {
+                        clearInterval(interval);
+                        Swal.fire({
+                            title: 'Proses Selesai!',
+                            text: data.message,
+                            icon: 'success',
+                            confirmButtonText: 'Oke'
+                        }).then(() => {
+                            window.location.reload();
+                        });
+                    }
+                })
+                .catch(err => {
+                    console.error('Error fetching status:', err);
+                });
+        }, 1500); // Ping setiap 1.5 detik
     }
 </script>
 {% endblock %}

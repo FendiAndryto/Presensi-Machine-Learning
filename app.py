@@ -226,21 +226,35 @@ def simpan_frame():
         return jsonify({'status': 'error', 'pesan': 'Wajah tidak terdeteksi'})
 
 # --- FITUR TRAINING WEB ---
-is_training = False
+training_status = {
+    'total': 0,
+    'current': 0,
+    'status': 'idle',
+    'message': ''
+}
 
-@app.route('/admin/train_model')
-def train_model_web():
-    if 'user_id' not in session or session['role'] != 'Admin': return redirect(url_for('index'))
+@app.route('/api/training_status')
+def get_training_status():
+    if 'user_id' not in session or session['role'] != 'Admin': 
+        return jsonify({'status': 'error', 'message': 'Unauthorized'})
+    return jsonify(training_status)
+
+@app.route('/api/start_training', methods=['POST'])
+def start_training():
+    if 'user_id' not in session or session['role'] != 'Admin': 
+        return jsonify({'status': 'error', 'message': 'Unauthorized'})
     
-    global is_training
-    if is_training:
-        flash('Proses training sedang berjalan di latar belakang, mohon tunggu beberapa saat.', 'warning')
-        return redirect(url_for('kelola_users'))
+    global training_status
+    if training_status['status'] == 'training':
+        return jsonify({'status': 'warning', 'message': 'Training sedang berjalan.'})
         
-    is_training = True
+    training_status['status'] = 'training'
+    training_status['current'] = 0
+    training_status['total'] = 0
+    training_status['message'] = 'Menyiapkan dataset...'
     
     def background_train():
-        global is_training
+        global training_status
         try:
             # --- GENERATE FACE ENCODINGS (Deep Learning) ---
             path = 'dataset'
@@ -251,6 +265,7 @@ def train_model_web():
             gagal_count = 0
             
             image_files = [f for f in os.listdir(path) if f.endswith('.jpg')]
+            training_status['total'] = len(image_files)
             
             for filename in image_files:
                 try:
@@ -260,6 +275,7 @@ def train_model_web():
                     # Skip file corrupt (terlalu kecil)
                     if os.path.getsize(filepath) < 2000:
                         gagal_count += 1
+                        training_status['current'] += 1
                         continue
                     
                     # Load gambar (handle grayscale lama & color baru)
@@ -285,7 +301,8 @@ def train_model_web():
                 except Exception as e: 
                     gagal_count += 1
                     print(f"[WARNING] Gagal memproses gambar {filename}: {e}")
-                    continue
+                
+                training_status['current'] += 1
             
             if len(all_ids) > 0:
                 # Simpan ke file pickle
@@ -300,16 +317,19 @@ def train_model_web():
                 
                 # Reload ke memory
                 load_encodings()
-                print(f"[INFO] Encoding selesai di background. Berhasil: {len(all_ids)}, Gagal: {gagal_count}")
+                training_status['message'] = f'Encoding selesai. Berhasil: {len(all_ids)}, Gagal: {gagal_count}'
+            else:
+                training_status['message'] = 'Gagal: Dataset kosong atau tidak ada wajah terdeteksi.'
+                
         finally:
-            is_training = False
+            training_status['status'] = 'done'
 
     # Jalankan proses di background thread
     thread = threading.Thread(target=background_train)
     thread.start()
     
-    flash('Proses encoding (Deep Learning) dimulai di latar belakang. Proses ini butuh waktu beberapa menit. Silakan refresh halaman ini nanti.', 'success')
-    return redirect(url_for('kelola_users'))
+    return jsonify({'status': 'success', 'message': 'Training dimulai di background'})
+
 
 # --- ROUTES AUTHENTICATION (LOGIN/LOGOUT) ---
 
