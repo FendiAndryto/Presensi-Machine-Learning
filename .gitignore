@@ -1,9 +1,21 @@
 # Env
 .env
 .env.example
-# Data
+.env.*
+!.env.example
+
+# Data & Runtime (PENTING: Jangan sampai terhapus git clean -fd)
 dataset/
 encodings/
-# Cache
+trainer/
+static/uploads/
+
+# Virtual Environment & Cache
+.venv/
+venv/
+env/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.py~
