@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
     pip uninstall -y opencv-python opencv-contrib-python opencv-python-headless opencv-contrib-python-headless 2>/dev/null || true && \
     rm -rf /usr/local/lib/python3.10/site-packages/cv2* /usr/local/lib/python3.10/site-packages/opencv* && \
-    pip install --no-cache-dir --force-reinstall opencv-python-headless && \
+    pip install --no-cache-dir --force-reinstall "opencv-python-headless<5.0.0,>=4.8.0" && \
     python -c "import cv2; print('OpenCV version:', cv2.__version__); print('CascadeClassifier check:', cv2.CascadeClassifier)"
 
 # Copy the rest of the application code
