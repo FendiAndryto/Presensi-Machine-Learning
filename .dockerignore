@@ -1,0 +1,30 @@
+# Git
+.git
+.gitignore
+
+# Python cache and virtual environments
+.venv
+venv
+env
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.py~
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Runtime & Volume directories (to speed up build and avoid copying local data)
+dataset/*
+!dataset/.gitkeep
+trainer/*
+!trainer/.gitkeep
+encodings/*
+!encodings/.gitkeep
+
+# Large documentation files
+*.pdf
+*.docx
