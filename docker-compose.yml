@@ -24,6 +24,7 @@ services:
       - "8000:8000"
     environment:
       - TZ=Asia/Jakarta
+      - DB_HOST=db
     env_file:
       - .env # <-- Ini kunci rahasianya, biar otomatis ngebaca file .env server
     volumes:
